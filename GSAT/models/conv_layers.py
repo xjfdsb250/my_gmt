@@ -11,18 +11,16 @@ from torch_geometric.nn.inits import reset
 from torch_geometric.utils import degree
 from torch_scatter import scatter
 
+
 class SGCConv(SGConv):
-    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: OptTensor = None, edge_atten: OptTensor = None, size: Size = None) -> Tensor:
+    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: OptTensor = None,
+                edge_atten: OptTensor = None, size: Size = None) -> Tensor:
         """"""
         if isinstance(x, Tensor):
             x: OptPairTensor = (x, x)
 
-        # propagate_type: (x: OptPairTensor)
+        # propagate_type: (x: OptPairTensor, edge_atten: OptTensor)
         out = self.propagate(edge_index, x=x, edge_atten=edge_atten, size=size)
-
-        # x_r = x[1]
-        # if x_r is not None:
-        #     out += (1 + self.eps) * x_r
 
         return self.lin(out)
 
@@ -32,13 +30,15 @@ class SGCConv(SGConv):
         else:
             return x_j
 
+
 class GINConv(BaseGINConv):
-    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: OptTensor = None, edge_atten: OptTensor = None, size: Size = None) -> Tensor:
+    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: OptTensor = None,
+                edge_atten: OptTensor = None, size: Size = None) -> Tensor:
         """"""
         if isinstance(x, Tensor):
             x: OptPairTensor = (x, x)
 
-        # propagate_type: (x: OptPairTensor)
+        # propagate_type: (x: OptPairTensor, edge_atten: OptTensor)
         out = self.propagate(edge_index, x=x, edge_atten=edge_atten, size=size)
 
         x_r = x[1]
@@ -55,12 +55,13 @@ class GINConv(BaseGINConv):
 
 
 class GINEConv(BaseGINEConv):
-    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: OptTensor = None, edge_atten: OptTensor = None, size: Size = None) -> Tensor:
+    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: OptTensor = None,
+                edge_atten: OptTensor = None, size: Size = None) -> Tensor:
         """"""
         if isinstance(x, Tensor):
             x: OptPairTensor = (x, x)
 
-        # propagate_type: (x: OptPairTensor, edge_attr: OptTensor)
+        # propagate_type: (x: OptPairTensor, edge_attr: OptTensor, edge_atten: OptTensor)
         out = self.propagate(edge_index, x=x, edge_attr=edge_attr, edge_atten=edge_atten, size=size)
 
         x_r = x[1]
@@ -95,7 +96,7 @@ class LEConv(BaseLEConv):
         a = self.lin1(x[0])
         b = self.lin2(x[1])
 
-        # propagate_type: (a: Tensor, b: Tensor, edge_weight: OptTensor)
+        # propagate_type: (a: Tensor, b: Tensor, edge_weight: OptTensor, edge_atten: OptTensor)
         out = self.propagate(edge_index, a=a, b=b, edge_weight=edge_weight, edge_atten=edge_atten, size=None)
 
         return out + self.lin3(x[1])
@@ -142,6 +143,7 @@ class PNAConvSimple(MessagePassing):
             **kwargs (optional): Additional arguments of
                 :class:`torch_geometric.nn.conv.MessagePassing`.
         """
+
     def __init__(self, in_channels: int, out_channels: int,
                  aggregators: List[str], scalers: List[str], deg: Tensor,
                  post_layers: int = 1, **kwargs):
@@ -177,15 +179,16 @@ class PNAConvSimple(MessagePassing):
 
     def forward(self, x: Tensor, edge_index: Adj, edge_attr: OptTensor = None, edge_atten=None) -> Tensor:
 
-        # propagate_type: (x: Tensor)
+        # propagate_type: (x: Tensor, edge_attr: OptTensor, edge_atten: OptTensor)
         out = self.propagate(edge_index, x=x, edge_attr=edge_attr, size=None, edge_atten=edge_atten)
         return self.post_nn(out)
 
     def message(self, x_i: Tensor, x_j: Tensor, edge_attr=None, edge_atten=None) -> Tensor:
+        h = x_i if x_j is None else x_j
         if edge_attr is not None:
-            m = torch.cat([x_i, x_j, edge_attr], dim=-1)
+            m = torch.cat([h, edge_attr], dim=-1)
         else:
-            m = torch.cat([x_i, x_j], dim=-1)
+            m = h
 
         if edge_atten is not None:
             return m * edge_atten
