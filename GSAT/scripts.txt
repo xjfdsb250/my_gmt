@@ -1,11 +1,11 @@
-nohup python run_gmt.py --dataset ba_bottle_shaped --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200 &
+nohup python run_gmt.py --dataset ba_bottle_shaped --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200 > ba_bottle_shaped_gmt.out 2>&1 &
 
-nohup python run_gmt.py --dataset ba_community --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200 &
+nohup python run_gmt.py --dataset ba_community --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200 > ba_community_gmt.out 2>&1 &
 
-nohup python run_gmt.py --dataset ba_grids --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200 &
+nohup python run_gmt.py --dataset ba_grids --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200 > ba_grids_gmt.out 2>&1 &
 
-nohup python run_gmt.py --dataset ba_house_shapes --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200 &
+nohup python run_gmt.py --dataset ba_house_shapes --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200 > ba_house_shapes_gmt.out 2>&1 &
 
-nohup python run_gmt.py --dataset tree_cycles --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200 &
+nohup python run_gmt.py --dataset tree_cycles --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200 > tree_cycles_gmt.out 2>&1 &
 
-nohup python run_gmt.py --dataset tree_grids --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200 &
+nohup python run_gmt.py --dataset tree_grids --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200 > tree_grids_gmt.out 2>&1 &
