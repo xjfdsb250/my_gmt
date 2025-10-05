@@ -5,6 +5,7 @@ from tqdm import tqdm
 from pathlib import Path
 from copy import deepcopy
 from datetime import datetime
+import time
 
 import torch
 import torch.nn as nn
@@ -423,81 +424,85 @@ class GSAT(nn.Module):
         phase = 'test ' if phase == 'test' else phase  # align tqdm desc bar
 
         all_loss_dict = {}
-        all_exp_labels, all_att, all_clf_labels, all_clf_logits, all_precision_at_k = ([] for i in range(5))
+        all_exp_labels, all_att, all_clf_labels, all_clf_logits, all_original_clf_logits = [], [], [], [], []
         pbar = tqdm(data_loader)
         for idx, data in enumerate(pbar):
             data = process_data(data, use_edge_attr)
             att, loss_dict, clf_logits = run_one_batch(data.to(self.device), epoch)
 
+            with torch.no_grad():
+                # --- FIX STARTS HERE ---
+                device_data = data.to(self.device)
+                original_clf_logits = self.clf(device_data.x, device_data.edge_index, device_data.batch,
+                                               edge_attr=device_data.edge_attr)
+                # --- FIX ENDS HERE ---
+
             exp_labels = data.edge_label.data.cpu()
-            precision_at_k = self.get_precision_at_k(att, exp_labels, self.k, data.batch, data.edge_index)
-            desc, _, _, _, _, _ = self.log_epoch(epoch, phase, loss_dict, exp_labels, att, precision_at_k,
-                                                 data.y.data.cpu(), clf_logits, batch=True)
+
+            desc, _, _, _, _ = self.log_epoch(epoch, phase, loss_dict, exp_labels, att,
+                                              data.y.data.cpu(), clf_logits, original_clf_logits.data.cpu(), batch=True)
             for k, v in loss_dict.items():
                 all_loss_dict[k] = all_loss_dict.get(k, 0) + v
 
-            all_exp_labels.append(exp_labels), all_att.append(att), all_precision_at_k.extend(precision_at_k)
+            all_exp_labels.append(exp_labels), all_att.append(att)
             all_clf_labels.append(data.y.data.cpu()), all_clf_logits.append(clf_logits)
+            all_original_clf_logits.append(original_clf_logits.data.cpu())
 
             if idx == loader_len - 1:
                 all_exp_labels, all_att = torch.cat(all_exp_labels), torch.cat(all_att),
                 all_clf_labels, all_clf_logits = torch.cat(all_clf_labels), torch.cat(all_clf_logits)
+                all_original_clf_logits = torch.cat(all_original_clf_logits)
 
                 for k, v in all_loss_dict.items():
                     all_loss_dict[k] = v / loader_len
-                desc, att_auroc, precision, clf_acc, clf_roc, avg_loss = self.log_epoch(epoch, phase, all_loss_dict,
-                                                                                        all_exp_labels, all_att,
-                                                                                        all_precision_at_k,
-                                                                                        all_clf_labels, all_clf_logits,
-                                                                                        batch=False)
+                desc, explanation_accuracy, distillation_accuracy, fidelity, avg_loss = self.log_epoch(epoch, phase,
+                                                                                                       all_loss_dict,
+                                                                                                       all_exp_labels,
+                                                                                                       all_att,
+                                                                                                       all_clf_labels,
+                                                                                                       all_clf_logits,
+                                                                                                       all_original_clf_logits,
+                                                                                                       batch=False)
             pbar.set_description(desc)
-        return att_auroc, precision, clf_acc, clf_roc, avg_loss, all_loss_dict.get('logits_tvd', -1)
+        return explanation_accuracy, distillation_accuracy, fidelity, avg_loss
 
     def train_self(self, loaders, test_set, metric_dict, use_edge_attr):
         viz_set = self.get_viz_idx(test_set, self.dataset_name)
+        distillation_start_time = time.time()
         for epoch in range(self.epochs):
             if self.multi_linear == 5775:
                 valid_res = self.run_one_epoch(loaders['valid'], epoch, 'test', use_edge_attr)
                 print(
-                    f"validation: att_auroc {valid_res[0]}, precision {valid_res[1]}, clf_acc {valid_res[2]}, clf_roc {valid_res[3]}")
+                    f"validation: explanation_accuracy {valid_res[0]}, distillation_accuracy {valid_res[1]}, fidelity {valid_res[2]}")
                 train_res = test_res = self.run_one_epoch(loaders['test'], epoch, 'test', use_edge_attr)
                 print(
-                    f"test: att_auroc {test_res[0]}, precision {test_res[1]}, clf_acc {test_res[2]}, clf_roc {test_res[3]}")
+                    f"test: explanation_accuracy {test_res[0]}, distillation_accuracy {test_res[1]}, fidelity {test_res[2]}")
+
             else:
                 train_res = self.run_one_epoch(loaders['train'], epoch, 'train', use_edge_attr)
                 valid_res = self.run_one_epoch(loaders['valid'], epoch, 'val', use_edge_attr)
                 test_res = self.run_one_epoch(loaders['test'], epoch, 'test', use_edge_attr)
             self.writer.add_scalar('xgnn_train/lr', get_lr(self.optimizer), epoch)
 
-            assert len(train_res) == 6
-            main_metric_idx = 3 if 'ogb' in self.dataset_name else 2  # clf_roc or clf_acc
+            main_metric_idx = 1  # distillation_accuracy
             if self.scheduler is not None:
                 self.scheduler.step(valid_res[main_metric_idx])
 
             r = self.fix_r if self.fix_r else self.get_r(self.decay_interval, self.decay_r, epoch, final_r=self.final_r,
                                                          init_r=self.init_r)
             if (r == self.final_r or self.fix_r) and (
-                    (valid_res[main_metric_idx] > metric_dict['metric/best_clf_valid'])
-                    or (valid_res[main_metric_idx] == metric_dict['metric/best_clf_valid']
-                        and valid_res[4] < metric_dict['metric/best_clf_valid_loss'])):
-
-                metric_dict = {'metric/best_clf_epoch': epoch, 'metric/best_clf_valid_loss': valid_res[4],
-                               'metric/best_clf_train': train_res[main_metric_idx],
-                               'metric/best_clf_valid': valid_res[main_metric_idx],
-                               'metric/best_clf_test': test_res[main_metric_idx],
-                               'metric/best_x_roc_train': train_res[0], 'metric/best_x_roc_valid': valid_res[0],
-                               'metric/best_x_roc_test': test_res[0],
-                               'metric/best_x_precision_train': train_res[1],
-                               'metric/best_x_precision_valid': valid_res[1],
-                               'metric/best_x_precision_test': test_res[1],
-                               'metric/best_tvd_train': train_res[5], 'metric/best_tvd_valid': valid_res[5],
-                               'metric/best_tvd_test': test_res[5], }
+                    (valid_res[main_metric_idx] > metric_dict['metric/distillation_accuracy'])
+                    or (valid_res[main_metric_idx] == metric_dict['metric/distillation_accuracy']
+                        and valid_res[3] < metric_dict['metric/best_clf_valid_loss'])):
+                distillation_time = time.time() - distillation_start_time
+                metric_dict = {'metric/best_clf_epoch': epoch, 'metric/best_clf_valid_loss': valid_res[3],
+                               'metric/explanation_accuracy': test_res[0],
+                               'metric/distillation_time': distillation_time,
+                               'metric/distillation_accuracy': test_res[1],
+                               'metric/fidelity': test_res[2], }
                 if self.save_mcmc:
-                    # mcmc_dir = Path("/".join(str(self.model_dir).split("/")[:3]))
                     save_checkpoint(self.clf, self.mcmc_dir, model_name=self.pre_model_name + f"_clf_mcmc")
                     save_checkpoint(self.extractor, self.mcmc_dir, model_name=self.pre_model_name + f"_att_mcmc")
-                # save_checkpoint(self.clf, self.model_dir, model_name='xgnn_clf_epoch_' + str(epoch))
-                # save_checkpoint(self.extractor, self.model_dir, model_name='xgnn_att_epoch_' + str(epoch))
 
             for metric, value in metric_dict.items():
                 metric = metric.split('/')[-1]
@@ -512,100 +517,62 @@ class GSAT(nn.Module):
                     except Exception as e:
                         print(e)
 
-            # if epoch == self.epochs - 1:
-            #     save_checkpoint(self.clf, self.model_dir, model_name='xgnn_clf_epoch_' + str(epoch))
-            #     save_checkpoint(self.extractor, self.model_dir, model_name='xgnn_att_epoch_' + str(epoch))
-
             print(f'[Seed {self.random_state}, Epoch: {epoch}]: Best Epoch: {metric_dict["metric/best_clf_epoch"]}, '
-                  f'Best Val Pred ACC/ROC: {metric_dict["metric/best_clf_valid"]:.3f}, Best Test Pred ACC/ROC: {metric_dict["metric/best_clf_test"]:.3f}, '
-                  f'Best Test X AUROC: {metric_dict["metric/best_x_roc_test"]:.3f}, Best Test Logits TVD: {metric_dict["metric/best_tvd_test"]:.3f}')
+                  f'Best Val Distillation Accuracy: {valid_res[1]:.3f}, Best Test Distillation Accuracy: {metric_dict["metric/distillation_accuracy"]:.3f}, '
+                  f'Best Test Explanation Accuracy: {metric_dict["metric/explanation_accuracy"]:.3f}')
             print('====================================')
             print('====================================')
+
+        explanation_extraction_start_time = time.time()
+        _ = self.run_one_epoch(loaders['test'], self.epochs - 1, 'test', use_edge_attr)
+        explanation_extraction_time = time.time() - explanation_extraction_start_time
+        metric_dict['metric/overall_runtime'] = metric_dict['metric/distillation_time'] + explanation_extraction_time
+
         return metric_dict
 
-    def log_epoch(self, epoch, phase, loss_dict, exp_labels, att, precision_at_k, clf_labels, clf_logits, batch):
+    def log_epoch(self, epoch, phase, loss_dict, exp_labels, att, clf_labels, clf_logits, original_clf_logits, batch):
         desc = f'[Seed {self.random_state}, Epoch: {epoch}]: xgnn_{phase}........., ' if batch else f'[Seed {self.random_state}, Epoch: {epoch}]: xgnn_{phase} finished, '
         for k, v in loss_dict.items():
             if not batch:
                 self.writer.add_scalar(f'xgnn_{phase}/{k}', v, epoch)
             desc += f'{k}: {v:.3f}, '
 
-        eval_desc, att_auroc, precision, clf_acc, clf_roc = self.get_eval_score(epoch, phase, exp_labels, att,
-                                                                                precision_at_k, clf_labels, clf_logits,
-                                                                                batch)
+        eval_desc, explanation_accuracy, distillation_accuracy, fidelity = self.get_eval_score(epoch, phase, exp_labels,
+                                                                                               att,
+                                                                                               clf_labels, clf_logits,
+                                                                                               original_clf_logits,
+                                                                                               batch)
         desc += eval_desc
-        if 'logits_tvd' in loss_dict.keys() and not batch:
-            self.writer.add_scalar(f'xgnn_{phase}/tvd_gap_acc', att_auroc - clf_acc, epoch)
-            self.writer.add_scalar(f'xgnn_{phase}/tvd_gap_roc', att_auroc - clf_roc, epoch)
-        return desc, att_auroc, precision, clf_acc, clf_roc, loss_dict['pred']
 
-    def get_eval_score(self, epoch, phase, exp_labels, att, precision_at_k, clf_labels, clf_logits, batch):
+        return desc, explanation_accuracy, distillation_accuracy, fidelity, loss_dict['pred']
+
+    def get_eval_score(self, epoch, phase, exp_labels, att, clf_labels, clf_logits, original_clf_logits, batch):
         clf_preds = get_preds(clf_logits, self.multi_label)
-        clf_acc = 0 if self.multi_label else (clf_preds == clf_labels).sum().item() / clf_labels.shape[0]
+        distillation_accuracy = 0 if self.multi_label else (clf_preds == clf_labels).sum().item() / clf_labels.shape[0]
+
+        original_clf_preds = get_preds(original_clf_logits, self.multi_label)
+        fidelity = 0 if self.multi_label else (clf_preds == original_clf_preds).sum().item() / original_clf_preds.shape[
+            0]
 
         if batch:
-            return f'clf_acc: {clf_acc:.3f}', None, None, None, None
+            return f'distil_acc: {distillation_accuracy:.3f}, fidelity: {fidelity:.3f}', None, None, None
 
-        precision_at_k = np.mean(precision_at_k)
-        clf_roc = 0
-        if 'ogb' in self.dataset_name:
-            evaluator = Evaluator(name='-'.join(self.dataset_name.split('_')))
-            clf_roc = evaluator.eval({'y_pred': clf_logits, 'y_true': clf_labels})['rocauc']
-
-        att_auroc, bkg_att_weights, signal_att_weights = 0, att, att
+        explanation_accuracy = 0
         if np.unique(exp_labels).shape[0] > 1:
-            att_auroc = roc_auc_score(exp_labels, att)
-            bkg_att_weights = att[exp_labels == 0]
-            signal_att_weights = att[exp_labels == 1]
+            explanation_accuracy = roc_auc_score(exp_labels, att)
 
-        self.writer.add_histogram(f'xgnn_{phase}/bkg_att_weights', bkg_att_weights, epoch)
-        self.writer.add_histogram(f'xgnn_{phase}/signal_att_weights', signal_att_weights, epoch)
-        self.writer.add_scalar(f'xgnn_{phase}/clf_acc/', clf_acc, epoch)
-        self.writer.add_scalar(f'xgnn_{phase}/clf_roc/', clf_roc, epoch)
-        self.writer.add_scalar(f'xgnn_{phase}/att_auroc/', att_auroc, epoch)
-        self.writer.add_scalar(f'xgnn_{phase}/precision@{self.k}/', precision_at_k, epoch)
-        self.writer.add_scalar(f'xgnn_{phase}/avg_bkg_att_weights/', bkg_att_weights.mean(), epoch)
-        self.writer.add_scalar(f'xgnn_{phase}/avg_signal_att_weights/', signal_att_weights.mean(), epoch)
-        self.writer.add_scalar(f'xgnn_{phase}/avg_att_weights_std/', att.std(), epoch)
-        self.writer.add_pr_curve(f'PR_Curve/xgnn_{phase}/', exp_labels, att, epoch)
+        self.writer.add_scalar(f'xgnn_{phase}/distillation_accuracy/', distillation_accuracy, epoch)
+        self.writer.add_scalar(f'xgnn_{phase}/explanation_accuracy/', explanation_accuracy, epoch)
+        self.writer.add_scalar(f'xgnn_{phase}/fidelity/', fidelity, epoch)
 
-        desc = f'clf_acc: {clf_acc:.3f}, clf_roc: {clf_roc:.3f}, ' + \
-               f'att_roc: {att_auroc:.3f}, att_prec@{self.k}: {precision_at_k:.3f}'
-        return desc, att_auroc, precision_at_k, clf_acc, clf_roc
-
-    def get_precision_at_k(self, att, exp_labels, k, batch, edge_index):
-        precision_at_k = []
-        for i in range(batch.max() + 1):
-            nodes_for_graph_i = batch == i
-            # --- FIX STARTS HERE ---
-            # 'edges_for_graph_i' is on the GPU, but 'exp_labels' and 'att' are on the CPU.
-            # Move the index tensor to the CPU before using it.
-            edges_for_graph_i = (nodes_for_graph_i[edge_index[0]] & nodes_for_graph_i[edge_index[1]]).cpu()
-            # --- FIX ENDS HERE ---
-
-            labels_for_graph_i = exp_labels[edges_for_graph_i]
-            mask_log_logits_for_graph_i = att[edges_for_graph_i]
-
-            # Add a check for empty tensors to avoid division by zero
-            if len(labels_for_graph_i) == 0:
-                precision_at_k.append(0.0)
-                continue
-
-            effective_k = min(k, len(labels_for_graph_i))
-            precision_at_k.append(
-                labels_for_graph_i[np.argsort(-mask_log_logits_for_graph_i)[:effective_k]].sum().item() / effective_k)
-
-        return precision_at_k
+        desc = f'distil_acc: {distillation_accuracy:.3f}, exp_acc: {explanation_accuracy:.3f}, fidelity: {fidelity:.3f}'
+        return desc, explanation_accuracy, distillation_accuracy, fidelity
 
     def get_viz_idx(self, test_set, dataset_name):
-        # --- FIX STARTS HERE ---
-        # 检查 test_set 是否为空
         if len(test_set) == 0:
             return []
 
         y_dist = np.array([data.y.item() for data in test_set]).reshape(-1)
-        # --- FIX ENDS HERE ---
-
         num_nodes = np.array([each.x.shape[0] for each in test_set])
         classes = np.unique(y_dist)
         res = []
@@ -617,18 +584,13 @@ class GSAT(nn.Module):
             else:
                 candidate_set = np.nonzero(y_dist == each_class)[0]
 
-            # --- !! 核心修改点 !! ---
-            # 动态调整抽样数量，确保不超过候选集的大小
             num_to_sample = min(self.num_viz_samples, len(candidate_set))
 
-            # 如果该类别下没有可供抽样的图，则跳过
             if num_to_sample == 0:
-                print(f"警告: 类别 {each_class} 在测试集中没有可用于可视化的样本。")
+                print(f"Warning: No samples available for visualization in class {each_class}.")
                 continue
 
             idx = np.random.choice(candidate_set, num_to_sample, replace=False)
-            # --- 修改结束 ---
-
             res.append((idx, tag))
         return res
 
@@ -690,7 +652,6 @@ class GSAT(nn.Module):
     def lift_edge_att_to_node_att(edge_att, edge_index, size=None):
         src_att = edge_att[edge_index[0]].view(-1)
         dst_att = edge_att[edge_index[1]].view(-1)
-        # print(src_att.size(),edge_index[0].size())
         src_att = scatter(src_att, edge_index[0], reduce='mul', dim_size=size)
         src_att = scatter(dst_att, edge_index[0], reduce='mul', dim_size=size)
         node_att = 1.0 - src_att * src_att
@@ -781,13 +742,9 @@ def train_xgnn_one_seed(local_config, data_dir, log_dir, model_name, dataset_nam
                                model=model, loaders=loaders, num_class=num_class, aux_info=aux_info)
             # save_checkpoint(model, model_dir=f"{data_dir}/{dataset_name}/", model_name=f'seed{random_state}_epoch_{pretrain_epochs}')
             torch.save({'model_state_dict': model.state_dict()}, pre_model_name)
-            # load_checkpoint(model, model_dir=f"{data_dir}/{dataset_name}/", model_name=f'seed{random_state}_epoch_{pretrain_epochs}')
-            # checkpoint = torch.load(pre_model_name)
-            # model.load_state_dict(checkpoint['model_state_dict'])
     else:
         print('[INFO] Training both the model and the attention from scratch...')
 
-    # local_config[f'{method_name}_config']['multi_linear']
     mt = 5
     if args.gcat_multi_linear >= 0:
         mt = args.gcat_multi_linear
@@ -917,7 +874,7 @@ def main():
     data_dir = Path(global_config['data_dir'])
     num_seeds = global_config['num_seeds']
 
-    time = datetime.now().strftime("%m_%d_%Y-%H_%M_%S")
+    time_str = datetime.now().strftime("%m_%d_%Y-%H_%M_%S")
     device = torch.device(f'cuda:{cuda_id}' if cuda_id >= 0 else 'cpu')
 
     metric_dicts = []
@@ -927,7 +884,7 @@ def main():
         if args.seed >= 0:
             random_state = args.seed
         log_dir = data_dir / dataset_name / f'{args.log_dir}' / (
-                time + '-' + dataset_name + '-' + model_name + '-seed' + str(random_state) + '-' + method_name + \
+                time_str + '-' + dataset_name + '-' + model_name + '-seed' + str(random_state) + '-' + method_name + \
                 f"-fs{args.from_scratch}-mt{args.multi_linear}st{args.sampling_trials}-ie{args.info_loss_coef}-r{local_config[f'{method_name}_config']['final_r']}-dr{local_config[f'{method_name}_config']['decay_r']}-di{local_config[f'{method_name}_config']['decay_interval']}")
         hparam_dict, metric_dict = train_xgnn_one_seed(local_config, data_dir, log_dir, model_name, dataset_name,
                                                        method_name, device, random_state, args)
@@ -935,16 +892,13 @@ def main():
     print(f"Final metrics")
     final_metrics = {}
     metric_keys = metric_dicts[0].keys()
-    for key in metric_keys:
-        metric_values = np.array([metric[key] for metric in metric_dicts])
-        if "tvd" not in key:
-            print(f"{key}:{metric_values.mean() * 100:2.2f}+-{metric_values.std() * 100:2.2f}")
-        else:
-            print(f"{key}:{metric_values.mean():2.2f}+-{metric_values.std():2.2f}")
-    # log_dir = data_dir / dataset_name / 'logs' / (time + '-' + dataset_name + '-' + model_name + '-seed99-' + method_name + '-stat')
-    # log_dir.mkdir(parents=True, exist_ok=True)
-    # writer = Writer(log_dir=log_dir)
-    # write_stat_from_metric_dicts(hparam_dict, metric_dicts, writer)
+    with open("metrics.txt", "w") as f:
+        for key in metric_keys:
+            metric_values = np.array([metric[key] for metric in metric_dicts])
+            mean = metric_values.mean()
+            std = metric_values.std()
+            f.write(f"{key}: {mean:.4f} +- {std:.4f}\n")
+            print(f"{key}: {mean:.4f} +- {std:.4f}")
 
 
 if __name__ == '__main__':
