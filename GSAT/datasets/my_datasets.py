@@ -1,9 +1,8 @@
 import torch
 from torch_geometric.data import InMemoryDataset, Data
-from torch_geometric.utils import dense_to_sparse
 import os.path as osp
 import numpy as np
-import ast  # 用于安全地将字符串转换为 Python 对象
+import ast
 
 
 class MyGraphClassificationDataset(InMemoryDataset):
@@ -37,60 +36,71 @@ class MyGraphClassificationDataset(InMemoryDataset):
         pass
 
     def process(self):
-        # --- 修改点 2: 读取全部四个文件 ---
         adj_path = osp.join(self.raw_dir, self.raw_file_names[0])
         feat_path = osp.join(self.raw_dir, self.raw_file_names[1])
         label_path = osp.join(self.raw_dir, self.raw_file_names[2])
         explanation_path = osp.join(self.raw_dir, self.raw_file_names[3])
 
-        adjs = np.load(adj_path)
-        feats = np.load(feat_path)
+        # 使用 allow_pickle=True 加载 .npy 对象数组
+        adjs = np.load(adj_path, allow_pickle=True)
+        feats = np.load(feat_path, allow_pickle=True)
         labels = np.load(label_path)
 
-        # --- 新增: 读取并解析解释文件 ---
         with open(explanation_path, 'r') as f:
-            # ast.literal_eval 可以安全地将字符串格式的字典转为真实的字典
             explanations = ast.literal_eval(f.read())
 
         data_list = []
-        num_graphs = adjs.shape[0]
+        num_graphs = len(labels)
         print(f"正在处理数据集 '{self.name}'，共找到 {num_graphs} 个图...")
 
         for i in range(num_graphs):
-            adj_matrix = adjs[i]
+            # --- !! 最终核心修改点 !! ---
+
+            # 1. 直接获取节点特征，并确定节点数
             node_features = feats[i]
-            graph_label = labels[i]
+            num_actual_nodes = node_features.shape[0]
 
-            actual_nodes_mask = np.any(node_features, axis=1)
-            num_actual_nodes = int(np.sum(actual_nodes_mask))
+            # 2. 获取一维的边列表
+            edge_list_flat = adjs[i]
 
-            adj_matrix = adj_matrix[actual_nodes_mask][:, actual_nodes_mask]
-            node_features = node_features[actual_nodes_mask]
+            # 3. 检查边列表是否为空或长度为奇数
+            if edge_list_flat is None or len(edge_list_flat) % 2 != 0:
+                print(f"警告: 图 {i} 的边列表格式不正确 (长度为 {len(edge_list_flat)})，已跳过。")
+                continue
 
-            edge_index = dense_to_sparse(torch.tensor(adj_matrix, dtype=torch.float))[0]
+            # 4. 将一维边列表重塑为 [2, num_edges] 的 edge_index 格式
+            if len(edge_list_flat) == 0:
+                edge_index = torch.empty((2, 0), dtype=torch.long)
+            else:
+                edge_index = torch.tensor(edge_list_flat, dtype=torch.long).reshape(-1, 2).t().contiguous()
+
+            # --- 修改结束 ---
+
+            # 如果特征是1D的，将其转换为 [N, 1] 的2D形状
+            if node_features.ndim == 1:
+                node_features = node_features.reshape(-1, 1)
+
             x = torch.tensor(node_features, dtype=torch.float)
-            y = torch.tensor([graph_label], dtype=torch.long)
+            y = torch.tensor([labels[i]], dtype=torch.long)
 
-            # --- 新增: 创建 node_label 和 edge_label ---
             node_label = torch.zeros(num_actual_nodes, dtype=torch.float)
 
-            # 从解释字典中获取当前图的重要节点索引
-            # 注意：图的索引可能与文件名中的索引不完全对应，这里我们假设是按顺序的
             if i in explanations:
                 important_nodes = explanations[i]
-                # 将重要节点的标签设置为 1
-                node_label[important_nodes] = 1.0
+                valid_important_nodes = [idx for idx in important_nodes if idx < num_actual_nodes]
+                if valid_important_nodes:
+                    node_label[valid_important_nodes] = 1.0
 
-            # 根据重要的节点，生成重要的边标签
-            # 一条边是重要的，当且仅当它的两个端点都是重要的
             edge_label_mask = (node_label[edge_index[0]] == 1) & (node_label[edge_index[1]] == 1)
             edge_label = edge_label_mask.float()
 
-            # 将 node_label 和 edge_label 添加到 Data 对象中
             data = Data(x=x, edge_index=edge_index, y=y,
                         node_label=node_label, edge_label=edge_label)
 
             data_list.append(data)
+
+        if len(data_list) == 0:
+            raise ValueError("处理完成后没有生成任何有效的图数据。请检查你的原始 .npy 文件是否为空或格式完全错误。")
 
         print(f"处理完成！成功创建 {len(data_list)} 个 Data 对象。")
 
