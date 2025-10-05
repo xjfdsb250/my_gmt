@@ -6,15 +6,18 @@ from torch_geometric.loader import DataLoader
 
 from ogb.graphproppred import PygGraphPropPredDataset
 from datasets import SynGraphDataset, Mutag, SPMotif, MNIST75sp, graph_sst2
+from datasets.my_datasets import MyGraphClassificationDataset
 
 
 def get_data_loaders(data_dir, dataset_name, batch_size, splits, random_state, mutag_x=False):
     multi_label = False
     assert dataset_name in ['ba_2motifs', 'mutag', 'Graph-SST2', 'mnist',
-                            'spmotif_0.5', 'spmotif_0.7', 'spmotif_0.9','spmotif_0.33', 
-                            'spmotif_0.50', 'spmotif_0.70', 'spmotif_0.90','spmotif_0.330', 
+                            'spmotif_0.5', 'spmotif_0.7', 'spmotif_0.9', 'spmotif_0.33',
+                            'spmotif_0.50', 'spmotif_0.70', 'spmotif_0.90', 'spmotif_0.330',
                             'ogbg_molhiv', 'ogbg_moltox21', 'ogbg_molbace',
-                            'ogbg_molbbbp', 'ogbg_molclintox', 'ogbg_molsider']
+                            'ogbg_molbbbp', 'ogbg_molclintox', 'ogbg_molsider',
+                            'ba_community', 'ba_grids', 'ba_house_shapes',
+                            'tree_cycles', 'tree_grids', 'ba_bottle_shaped']
 
     if dataset_name == 'ba_2motifs':
         dataset = SynGraphDataset(data_dir, 'ba_2motifs')
@@ -37,7 +40,8 @@ def get_data_loaders(data_dir, dataset_name, batch_size, splits, random_state, m
 
     elif dataset_name == 'Graph-SST2':
         dataset = graph_sst2.get_dataset(dataset_dir=data_dir, dataset_name='Graph-SST2', task=None)
-        dataloader, (train_set, valid_set, test_set) = graph_sst2.get_dataloader(dataset, batch_size=batch_size, degree_bias=True, seed=random_state)
+        dataloader, (train_set, valid_set, test_set) = graph_sst2.get_dataloader(dataset, batch_size=batch_size,
+                                                                                 degree_bias=True, seed=random_state)
         print('[INFO] Using default splits!')
         loaders = {'train': dataloader['train'], 'valid': dataloader['eval'], 'test': dataloader['test']}
         test_set = dataset  # used for visualization
@@ -54,7 +58,8 @@ def get_data_loaders(data_dir, dataset_name, batch_size, splits, random_state, m
         valid_set = SPMotif(root=data_dir / dataset_name, b=b, mode='val')
         test_set = SPMotif(root=data_dir / dataset_name, b=b, mode='test')
         print('[INFO] Using default splits!')
-        loaders, test_set = get_loaders_and_test_set(batch_size, dataset_splits={'train': train_set, 'valid': valid_set, 'test': test_set})
+        loaders, test_set = get_loaders_and_test_set(batch_size, dataset_splits={'train': train_set, 'valid': valid_set,
+                                                                                 'test': test_set})
 
     elif dataset_name == 'mnist':
         n_train_data, n_val_data = 20000, 5000
@@ -64,8 +69,15 @@ def get_data_loaders(data_dir, dataset_name, batch_size, splits, random_state, m
 
         train_set, valid_set = train_val[:n_train_data], train_val[-n_val_data:]
         test_set = MNIST75sp(data_dir / 'mnist', mode='test')
-        loaders, test_set = get_loaders_and_test_set(batch_size, dataset_splits={'train': train_set, 'valid': valid_set, 'test': test_set})
+        loaders, test_set = get_loaders_and_test_set(batch_size, dataset_splits={'train': train_set, 'valid': valid_set,
+                                                                                 'test': test_set})
         print('[INFO] Using default splits!')
+    elif dataset_name in ['ba_community', 'ba_grids', 'ba_house_shapes',
+                          'tree_cycles', 'tree_grids', 'ba_bottle_shaped']:
+        dataset = MyGraphClassificationDataset(root=data_dir, name=dataset_name)
+        split_idx = get_random_split_idx(dataset, splits)
+        loaders, test_set = get_loaders_and_test_set(batch_size, dataset=dataset, split_idx=split_idx)
+        train_set = dataset[split_idx["train"]]
     # train_loader=loaders['train']
     # valid_loader=loaders['valid']
     # test_loader=loaders['test']
@@ -115,8 +127,8 @@ def get_random_split_idx(dataset, splits, random_state=None, mutag_x=False):
     if not mutag_x:
         n_train, n_valid = int(splits['train'] * len(idx)), int(splits['valid'] * len(idx))
         train_idx = idx[:n_train]
-        valid_idx = idx[n_train:n_train+n_valid]
-        test_idx = idx[n_train+n_valid:]
+        valid_idx = idx[n_train:n_train + n_valid]
+        test_idx = idx[n_train + n_valid:]
     else:
         print('[INFO] mutag_x is True!')
         n_train = int(splits['train'] * len(idx))

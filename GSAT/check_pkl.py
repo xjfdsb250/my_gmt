@@ -1,8 +1,7 @@
 import pickle
 import numpy as np
 
-# --- 修改这里为你 .pkl 文件的实际路径 ---
-file_path = 'ba_community.pkl'
+file_path = './data/ba_community/raw/ba_community.pkl'
 
 
 def inspect_pkl(path):
