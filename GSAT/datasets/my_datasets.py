@@ -3,6 +3,7 @@ from torch_geometric.data import InMemoryDataset, Data
 import os.path as osp
 import numpy as np
 import ast
+from torch_geometric.utils import dense_to_sparse
 
 
 class MyGraphClassificationDataset(InMemoryDataset):
@@ -41,48 +42,57 @@ class MyGraphClassificationDataset(InMemoryDataset):
         label_path = osp.join(self.raw_dir, self.raw_file_names[2])
         explanation_path = osp.join(self.raw_dir, self.raw_file_names[3])
 
-        # 使用 allow_pickle=True 加载 .npy 对象数组
         adjs = np.load(adj_path, allow_pickle=True)
         feats = np.load(feat_path, allow_pickle=True)
         labels = np.load(label_path)
 
-        with open(explanation_path, 'r') as f:
-            explanations = ast.literal_eval(f.read())
+        try:
+            with open(explanation_path, 'r') as f:
+                explanations = ast.literal_eval(f.read())
+        except FileNotFoundError:
+            print(f"警告: 未找到解釋文件 {explanation_path}。將為所有節點生成空的 'node_label'。")
+            explanations = {}
 
         data_list = []
         num_graphs = len(labels)
-        print(f"正在处理数据集 '{self.name}'，共找到 {num_graphs} 个图...")
+        print(f"正在處理數據集 '{self.name}'，共找到 {num_graphs} 個圖...")
 
         for i in range(num_graphs):
-            # --- !! 最终核心修改点 !! ---
-
-            # 1. 直接获取节点特征，并确定节点数
             node_features = feats[i]
+            adj_row = adjs[i]  # 獲取代表單個圖的數據行
+
+            # --- !! 最終核心修改邏輯 !! ---
+
+            # 1. 根據特徵文件確定實際節點數
             num_actual_nodes = node_features.shape[0]
 
-            # 2. 获取一维的边列表
-            edge_list_flat = adjs[i]
+            # 2. 計算扁平化鄰接矩陣所需的長度
+            expected_len = num_actual_nodes * num_actual_nodes
 
-            # 3. 检查边列表是否为空或长度为奇数
-            if edge_list_flat is None or len(edge_list_flat) % 2 != 0:
-                print(f"警告: 图 {i} 的边列表格式不正确 (长度为 {len(edge_list_flat)})，已跳过。")
+            # 3. 檢查提供的鄰接信息數組長度是否足夠
+            if len(adj_row) < expected_len:
+                print(
+                    f"警告: 圖 {i} 的鄰接信息長度 ({len(adj_row)}) 不足以構成一個 {num_actual_nodes}x{num_actual_nodes} 的矩陣 (需要 {expected_len})，已跳過。")
                 continue
 
-            # 4. 将一维边列表重塑为 [2, num_edges] 的 edge_index 格式
-            if len(edge_list_flat) == 0:
-                edge_index = torch.empty((2, 0), dtype=torch.long)
-            else:
-                edge_index = torch.tensor(edge_list_flat, dtype=torch.long).reshape(-1, 2).t().contiguous()
+            # 4. 截取所需部分並重塑為二維鄰接矩陣
+            try:
+                # 截取前 expected_len 個元素並重塑
+                adj_matrix = adj_row[:expected_len].reshape(num_actual_nodes, num_actual_nodes)
+            except ValueError as e:
+                print(f"警告: 圖 {i} 在重塑鄰接矩陣時出錯: {e}，已跳過。")
+                continue
 
-            # --- 修改结束 ---
+            # 5. 從稠密鄰接矩陣轉換為稀疏的 edge_index 格式
+            edge_index = dense_to_sparse(torch.from_numpy(adj_matrix).float())[0]
 
-            # 如果特征是1D的，将其转换为 [N, 1] 的2D形状
+            # --- 修改結束 ---
+
             if node_features.ndim == 1:
                 node_features = node_features.reshape(-1, 1)
 
             x = torch.tensor(node_features, dtype=torch.float)
             y = torch.tensor([labels[i]], dtype=torch.long)
-
             node_label = torch.zeros(num_actual_nodes, dtype=torch.float)
 
             if i in explanations:
@@ -91,18 +101,23 @@ class MyGraphClassificationDataset(InMemoryDataset):
                 if valid_important_nodes:
                     node_label[valid_important_nodes] = 1.0
 
-            edge_label_mask = (node_label[edge_index[0]] == 1) & (node_label[edge_index[1]] == 1)
-            edge_label = edge_label_mask.float()
+            if edge_index.numel() > 0:
+                if edge_index.max() >= num_actual_nodes:
+                    print(
+                        f"警告: 圖 {i} 的 edge_index 包含越界索引 ({edge_index.max()})，節點數為 {num_actual_nodes}，已跳過。")
+                    continue
+                edge_label_mask = (node_label[edge_index[0]] == 1) & (node_label[edge_index[1]] == 1)
+                edge_label = edge_label_mask.float()
+            else:
+                edge_label = torch.empty(0, dtype=torch.float)
 
-            data = Data(x=x, edge_index=edge_index, y=y,
-                        node_label=node_label, edge_label=edge_label)
-
+            data = Data(x=x, edge_index=edge_index, y=y, node_label=node_label, edge_label=edge_label)
             data_list.append(data)
 
         if len(data_list) == 0:
-            raise ValueError("处理完成后没有生成任何有效的图数据。请检查你的原始 .npy 文件是否为空或格式完全错误。")
+            raise ValueError("處理完成後沒有生成任何有效的圖數據。請檢查你的原始 .npy 文件是否為空或格式完全錯誤。")
 
-        print(f"处理完成！成功创建 {len(data_list)} 个 Data 对象。")
+        print(f"處理完成！成功創建 {len(data_list)} 個 Data 對象。")
 
         if self.pre_filter is not None:
             data_list = [data for data in data_list if self.pre_filter(data)]
