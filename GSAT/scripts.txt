@@ -1,11 +1,11 @@
-python run_gmt.py --dataset ba_bottle_shaped --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200
+nohup python run_gmt.py --dataset ba_bottle_shaped --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200 &
 
-python run_gmt.py --dataset ba_community --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200
+nohup python run_gmt.py --dataset ba_community --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200 &
 
-python run_gmt.py --dataset ba_grids --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200
+nohup python run_gmt.py --dataset ba_grids --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200 &
 
-python run_gmt.py --dataset ba_house_shapes --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200
+nohup python run_gmt.py --dataset ba_house_shapes --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200 &
 
-python run_gmt.py --dataset tree_cycles --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200
+nohup python run_gmt.py --dataset tree_cycles --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200 &
 
-python run_gmt.py --dataset tree_grids --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200
+nohup python run_gmt.py --dataset tree_grids --backbone GIN --cuda 0 -fs 1 -mt 3 -ie 0.5 -ep 200 &
