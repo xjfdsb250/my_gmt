@@ -598,18 +598,37 @@ class GSAT(nn.Module):
         return precision_at_k
 
     def get_viz_idx(self, test_set, dataset_name):
-        y_dist = test_set.data.y.numpy().reshape(-1)
+        # --- FIX STARTS HERE ---
+        # 检查 test_set 是否为空
+        if len(test_set) == 0:
+            return []
+
+        y_dist = np.array([data.y.item() for data in test_set]).reshape(-1)
+        # --- FIX ENDS HERE ---
+
         num_nodes = np.array([each.x.shape[0] for each in test_set])
         classes = np.unique(y_dist)
         res = []
         for each_class in classes:
             tag = 'class_' + str(each_class)
             if dataset_name == 'Graph-SST2':
-                condi = (y_dist == each_class) * (num_nodes > 5) * (num_nodes < 10)  # in case too short or too long
+                condi = (y_dist == each_class) * (num_nodes > 5) * (num_nodes < 10)
                 candidate_set = np.nonzero(condi)[0]
             else:
                 candidate_set = np.nonzero(y_dist == each_class)[0]
-            idx = np.random.choice(candidate_set, self.num_viz_samples, replace=False)
+
+            # --- !! 核心修改点 !! ---
+            # 动态调整抽样数量，确保不超过候选集的大小
+            num_to_sample = min(self.num_viz_samples, len(candidate_set))
+
+            # 如果该类别下没有可供抽样的图，则跳过
+            if num_to_sample == 0:
+                print(f"警告: 类别 {each_class} 在测试集中没有可用于可视化的样本。")
+                continue
+
+            idx = np.random.choice(candidate_set, num_to_sample, replace=False)
+            # --- 修改结束 ---
+
             res.append((idx, tag))
         return res
 
@@ -908,8 +927,8 @@ def main():
         if args.seed >= 0:
             random_state = args.seed
         log_dir = data_dir / dataset_name / f'{args.log_dir}' / (
-                    time + '-' + dataset_name + '-' + model_name + '-seed' + str(random_state) + '-' + method_name + \
-                    f"-fs{args.from_scratch}-mt{args.multi_linear}st{args.sampling_trials}-ie{args.info_loss_coef}-r{local_config[f'{method_name}_config']['final_r']}-dr{local_config[f'{method_name}_config']['decay_r']}-di{local_config[f'{method_name}_config']['decay_interval']}")
+                time + '-' + dataset_name + '-' + model_name + '-seed' + str(random_state) + '-' + method_name + \
+                f"-fs{args.from_scratch}-mt{args.multi_linear}st{args.sampling_trials}-ie{args.info_loss_coef}-r{local_config[f'{method_name}_config']['final_r']}-dr{local_config[f'{method_name}_config']['decay_r']}-di{local_config[f'{method_name}_config']['decay_interval']}")
         hparam_dict, metric_dict = train_xgnn_one_seed(local_config, data_dir, log_dir, model_name, dataset_name,
                                                        method_name, device, random_state, args)
         metric_dicts.append(metric_dict)
