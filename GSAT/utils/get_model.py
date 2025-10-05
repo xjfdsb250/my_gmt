@@ -27,7 +27,10 @@ class Criterion(nn.Module):
 
     def forward(self, logits, targets):
         if self.num_class == 2 and not self.multi_label:
-            loss = F.binary_cross_entropy_with_logits(logits, targets.float())
+            # --- !! 核心修改點 !! ---
+            # 將 targets 的形狀調整為與 logits 匹配
+            loss = F.binary_cross_entropy_with_logits(logits, targets.float().view_as(logits))
+            # --- 修改結束 ---
         elif self.num_class > 2 and not self.multi_label:
             loss = F.cross_entropy(logits, targets.long())
         else:
