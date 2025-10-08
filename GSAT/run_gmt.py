@@ -892,7 +892,7 @@ def main():
     print(f"Final metrics")
     final_metrics = {}
     metric_keys = metric_dicts[0].keys()
-    with open("metrics.txt", "w") as f:
+    with open(dataset_name + 'metrics.txt', "w") as f:
         for key in metric_keys:
             metric_values = np.array([metric[key] for metric in metric_dicts])
             mean = metric_values.mean()
