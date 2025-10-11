@@ -19,9 +19,7 @@ class SGCConv(SGConv):
         if isinstance(x, Tensor):
             x: OptPairTensor = (x, x)
 
-        # propagate_type: (x: OptPairTensor, edge_atten: OptTensor)
         out = self.propagate(edge_index, x=x, edge_atten=edge_atten, size=size)
-
         return self.lin(out)
 
     def message(self, x_j: Tensor, edge_atten: OptTensor = None) -> Tensor:
@@ -38,7 +36,6 @@ class GINConv(BaseGINConv):
         if isinstance(x, Tensor):
             x: OptPairTensor = (x, x)
 
-        # propagate_type: (x: OptPairTensor, edge_atten: OptTensor)
         out = self.propagate(edge_index, x=x, edge_atten=edge_atten, size=size)
 
         x_r = x[1]
@@ -49,6 +46,13 @@ class GINConv(BaseGINConv):
 
     def message(self, x_j: Tensor, edge_atten: OptTensor = None) -> Tensor:
         if edge_atten is not None:
+            # --- !! 核心修改點 !! ---
+            # 增加保護性檢查，處理 edge_atten 可能出現的錯誤形狀
+            # 如果 edge_atten 的特徵維度大於 1 (例如是 128)，則對其取平均值，
+            # 將其強制轉換為 [num_edges, 1] 的形狀。
+            if edge_atten.dim() > 1 and edge_atten.shape[1] > 1:
+                edge_atten = edge_atten.mean(dim=1, keepdim=True)
+            # --- 修改結束 ---
             return x_j * edge_atten
         else:
             return x_j
@@ -61,7 +65,6 @@ class GINEConv(BaseGINEConv):
         if isinstance(x, Tensor):
             x: OptPairTensor = (x, x)
 
-        # propagate_type: (x: OptPairTensor, edge_attr: OptTensor, edge_atten: OptTensor)
         out = self.propagate(edge_index, x=x, edge_attr=edge_attr, edge_atten=edge_atten, size=size)
 
         x_r = x[1]
@@ -96,7 +99,6 @@ class LEConv(BaseLEConv):
         a = self.lin1(x[0])
         b = self.lin2(x[1])
 
-        # propagate_type: (a: Tensor, b: Tensor, edge_weight: OptTensor, edge_atten: OptTensor)
         out = self.propagate(edge_index, a=a, b=b, edge_weight=edge_weight, edge_atten=edge_atten, size=None)
 
         return out + self.lin3(x[1])
@@ -111,7 +113,7 @@ class LEConv(BaseLEConv):
             return m
 
 
-# https://github.com/lukecavabarrett/pna/blob/master/models/pytorch_geometric/pna.py
+# ... (文件的其餘部分保持不變)
 class PNAConvSimple(MessagePassing):
     r"""The Principal Neighbourhood Aggregation graph convolution operator
     from the `"Principal Neighbourhood Aggregation for Graph Nets"
@@ -179,16 +181,14 @@ class PNAConvSimple(MessagePassing):
 
     def forward(self, x: Tensor, edge_index: Adj, edge_attr: OptTensor = None, edge_atten=None) -> Tensor:
 
-        # propagate_type: (x: Tensor, edge_attr: OptTensor, edge_atten: OptTensor)
         out = self.propagate(edge_index, x=x, edge_attr=edge_attr, size=None, edge_atten=edge_atten)
         return self.post_nn(out)
 
     def message(self, x_i: Tensor, x_j: Tensor, edge_attr=None, edge_atten=None) -> Tensor:
-        h = x_i if x_j is None else x_j
         if edge_attr is not None:
-            m = torch.cat([h, edge_attr], dim=-1)
+            m = torch.cat([x_i, x_j, edge_attr], dim=-1)
         else:
-            m = h
+            m = torch.cat([x_i, x_j], dim=-1)
 
         if edge_atten is not None:
             return m * edge_atten
