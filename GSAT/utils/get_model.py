@@ -27,14 +27,11 @@ class Criterion(nn.Module):
 
     def forward(self, logits, targets):
         if self.num_class == 2 and not self.multi_label:
-            # --- !! 核心修改點 !! ---
-            # 將 targets 的形狀調整為與 logits 匹配
             loss = F.binary_cross_entropy_with_logits(logits, targets.float().view_as(logits))
-            # --- 修改結束 ---
         elif self.num_class > 2 and not self.multi_label:
             loss = F.cross_entropy(logits, targets.long())
         else:
-            is_labeled = targets == targets  # mask for labeled data
+            is_labeled = targets == targets
             loss = F.binary_cross_entropy_with_logits(logits[is_labeled], targets[is_labeled].float())
         return loss
 
@@ -42,15 +39,22 @@ class Criterion(nn.Module):
 def get_preds(logits, multi_label):
     if multi_label:
         preds = (logits.sigmoid() > 0.5).float()
-    elif logits.shape[1] > 1:  # multi-class
+    elif logits.shape[1] > 1:
         preds = logits.argmax(dim=1).float()
-    else:  # binary
+    else:
         preds = (logits.sigmoid() > 0.5).float()
     return preds
 
 
 class BatchSequential(nn.Sequential):
     def forward(self, inputs, batch):
+        # --- !! 核心修改點 !! ---
+        # 如果輸入的張量是空的 (例如，當一個批次中所有的圖都沒有邊時)，
+        # 則直接返回，避免在 InstanceNorm 中對空張量調用 .max()
+        if inputs.numel() == 0:
+            return inputs
+        # --- 修改結束 ---
+
         for module in self._modules.values():
             if isinstance(module, (InstanceNorm)):
                 inputs = module(inputs, batch)

@@ -1,0 +1,8 @@
+--- Final Averaged Metrics for ba_house_shapes with GIN over 10 Seed(s) ---
+best_epoch: 75.7000 ± 37.9685
+best_val_loss: 0.7242 ± 0.1857
+explanation_accuracy: 0.5027 ± 0.2066
+distillation_time: 23.0881s ± 11.4291s
+overall_runtime: 23.1104s ± 11.4289s
+distillation_accuracy: 0.6700 ± 0.0440
+fidelity: -0.0143 ± 0.0143

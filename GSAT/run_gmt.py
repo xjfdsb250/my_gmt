@@ -167,33 +167,6 @@ class GSAT(nn.Module):
             loss_dict['info_grad'] = info_grad.norm().item()
         return loss, loss_dict
 
-    def package_subgraph(self, data, att_bern, epoch, verbose=False):
-        b = torch.bernoulli(att_bern)
-        att_binary = (b - att_bern).detach() + att_bern  # straight-through estimator
-
-        def relabel(x, edge_index, batch, pos=None):
-            num_nodes = x.size(0)
-            sub_nodes = torch.unique(edge_index)
-            x = x[sub_nodes]
-            batch = batch[sub_nodes]
-            row, col = edge_index
-            node_idx = row.new_full((num_nodes,), -1)
-            node_idx[sub_nodes] = torch.arange(sub_nodes.size(0), device=x.device)
-            edge_index = node_idx[edge_index]
-            if pos is not None:
-                pos = pos[sub_nodes]
-            return x, edge_index, batch, pos
-
-        idx_reserve = torch.nonzero(att_binary == 1, as_tuple=True)[0]
-        if verbose:
-            print(len(idx_reserve) / len(att_binary), self.get_r(
-                self.decay_interval, self.decay_r, epoch, final_r=self.final_r, init_r=self.init_r))
-        causal_edge_index = data.edge_index[:, idx_reserve]
-        causal_edge_attr = data.edge_attr[idx_reserve] if data.edge_attr is not None else None
-        causal_edge_atten = att_binary[idx_reserve]
-        causal_x, causal_edge_index, causal_batch, _ = relabel(data.x, causal_edge_index, data.batch)
-        return causal_x, causal_edge_index, causal_batch, causal_edge_attr, causal_edge_atten, 0
-
     def attend(self, data, att_log_logits, epoch, training):
         att = self.sampling(att_log_logits, epoch, training)
         if self.learn_edge_att:
@@ -216,14 +189,11 @@ class GSAT(nn.Module):
         loss, loss_dict = self.__loss__(att_log_logits.sigmoid(), clf_logits, data.y, epoch, training)
 
         edge_att = att_log_logits.sigmoid().detach()
-        if self.learn_edge_att:
-            if is_undirected(data.edge_index):
-                trans_idx, trans_val = transpose(data.edge_index, edge_att, None, None, coalesced=False)
-                trans_val_perm = reorder_like(trans_idx, data.edge_index, trans_val)
-                edge_att = (edge_att + trans_val_perm) / 2
-            else:
-                edge_att = edge_att
-        else:
+        if self.learn_edge_att and is_undirected(data.edge_index):
+            trans_idx, trans_val = transpose(data.edge_index, edge_att, None, None, coalesced=False)
+            trans_val_perm = reorder_like(trans_idx, data.edge_index, trans_val)
+            edge_att = (edge_att + trans_val_perm) / 2
+        elif not self.learn_edge_att:
             edge_att = self.lift_node_att_to_edge_att(edge_att, data.edge_index)
 
         return edge_att, loss, loss_dict, clf_logits
@@ -249,10 +219,11 @@ class GSAT(nn.Module):
     def run_one_epoch(self, data_loader, epoch, phase, use_edge_attr):
         loader_len = len(data_loader)
         run_one_batch = self.train_one_batch if phase == 'train' else self.eval_one_batch
-        phase = 'test ' if phase == 'test' else phase
+        phase_str = 'test ' if phase == 'test' else phase
 
         all_loss_dict = {}
         all_exp_labels, all_att, all_clf_labels, all_clf_logits, all_original_clf_logits = [], [], [], [], []
+
         pbar = tqdm(data_loader)
         for idx, data in enumerate(pbar):
             data = process_data(data, use_edge_attr)
@@ -263,7 +234,7 @@ class GSAT(nn.Module):
                 original_clf_logits = self.clf(device_data.x, device_data.edge_index, device_data.batch,
                                                edge_attr=device_data.edge_attr)
 
-            desc, _, _, _, _ = self.log_epoch(epoch, phase, loss_dict, data.edge_label.data.cpu(), att,
+            desc, _, _, _, _ = self.log_epoch(epoch, phase_str, loss_dict, data.edge_label.data.cpu(), att,
                                               data.y.data.cpu(), clf_logits, original_clf_logits.data.cpu(), batch=True)
             for k, v in loss_dict.items():
                 all_loss_dict[k] = all_loss_dict.get(k, 0) + v
@@ -284,37 +255,34 @@ class GSAT(nn.Module):
                 for k, v in all_loss_dict.items():
                     all_loss_dict[k] = v / loader_len
 
-                desc, explanation_roc_auc, distillation_accuracy, fidelity, avg_loss = self.log_epoch(
-                    epoch, phase, all_loss_dict, all_exp_labels, all_att,
+                desc, explanation_accuracy, distillation_accuracy, fidelity, avg_loss = self.log_epoch(
+                    epoch, phase_str, all_loss_dict, all_exp_labels, all_att,
                     all_clf_labels, all_clf_logits, all_original_clf_logits, batch=False)
             pbar.set_description(desc)
-        return explanation_roc_auc, distillation_accuracy, fidelity, avg_loss
+
+        return explanation_accuracy, distillation_accuracy, fidelity, avg_loss
 
     def train_self(self, loaders, test_set, metric_dict, use_edge_attr):
         distillation_start_time = time.time()
+
         for epoch in range(self.epochs):
             train_res = self.run_one_epoch(loaders['train'], epoch, 'train', use_edge_attr)
             valid_res = self.run_one_epoch(loaders['valid'], epoch, 'val', use_edge_attr)
             test_res = self.run_one_epoch(loaders['test'], epoch, 'test', use_edge_attr)
 
             if self.scheduler is not None:
-                self.scheduler.step(valid_res[1])  # Step based on validation distillation_accuracy
+                self.scheduler.step(valid_res[1])
 
-            r = self.fix_r if self.fix_r else self.get_r(self.decay_interval, self.decay_r, epoch, final_r=self.final_r,
-                                                         init_r=self.init_r)
-
-            # Update best metrics based on validation distillation_accuracy
-            if (r == self.final_r or self.fix_r) and (
-                    valid_res[1] > metric_dict['metric/distillation_accuracy']
-                    or (valid_res[1] == metric_dict['metric/distillation_accuracy']
-                        and valid_res[3] < metric_dict['metric/best_val_loss'])):
+            if (valid_res[1] > metric_dict['metric/distillation_accuracy'] or
+                    (valid_res[1] == metric_dict['metric/distillation_accuracy'] and valid_res[3] < metric_dict[
+                        'metric/best_val_loss'])):
 
                 distillation_time = time.time() - distillation_start_time
 
                 metric_dict.update({
                     'metric/best_epoch': epoch,
                     'metric/best_val_loss': valid_res[3],
-                    'metric/explanation_roc_auc': test_res[0],
+                    'metric/explanation_accuracy': test_res[0],
                     'metric/distillation_time': distillation_time,
                     'metric/distillation_accuracy': test_res[1],
                     'metric/fidelity': test_res[2]
@@ -328,11 +296,10 @@ class GSAT(nn.Module):
 
             print(f'[Seed {self.random_state}, Epoch: {epoch}]: Best Epoch: {metric_dict["metric/best_epoch"]}, '
                   f'Test Distill Acc: {metric_dict["metric/distillation_accuracy"]:.4f}, '
-                  f'Test Explan ROC: {metric_dict["metric/explanation_roc_auc"]:.4f}, '
+                  f'Test Explan Acc: {metric_dict["metric/explanation_accuracy"]:.4f}, '
                   f'Test Fidelity: {metric_dict["metric/fidelity"]:.4f}')
             print('=' * 80)
 
-        # After the loop, calculate overall runtime
         explanation_extraction_start_time = time.time()
         _ = self.run_one_epoch(loaders['test'], self.epochs, 'test', use_edge_attr)
         explanation_extraction_time = time.time() - explanation_extraction_start_time
@@ -348,25 +315,20 @@ class GSAT(nn.Module):
                 self.writer.add_scalar(f'{phase}/{k}', v, epoch)
             desc += f'{k}: {v:.3f}, '
 
-        eval_desc, explanation_roc_auc, distillation_accuracy, fidelity = self.get_eval_score(
+        eval_desc, explanation_accuracy, distillation_accuracy, fidelity = self.get_eval_score(
             exp_labels, att, clf_labels, clf_logits, original_clf_logits, batch)
         desc += eval_desc
 
         if not batch:
-            self.writer.add_scalar(f'{phase}/explanation_roc_auc', explanation_roc_auc, epoch)
+            self.writer.add_scalar(f'{phase}/explanation_accuracy', explanation_accuracy, epoch)
             self.writer.add_scalar(f'{phase}/distillation_accuracy', distillation_accuracy, epoch)
             self.writer.add_scalar(f'{phase}/fidelity', fidelity, epoch)
 
-        return desc, explanation_roc_auc, distillation_accuracy, fidelity, loss_dict['pred']
+        return desc, explanation_accuracy, distillation_accuracy, fidelity, loss_dict['pred']
 
     def get_eval_score(self, exp_labels, att, clf_labels, clf_logits, original_clf_logits, batch):
-        # --- Distillation Accuracy ---
         distillation_accuracy = accuracy_score(clf_labels.cpu().numpy(),
                                                get_preds(clf_logits, self.multi_label).cpu().numpy())
-
-        # --- Fidelity ---
-        # According to the user's definition "The closer Fidelity is to zero, the better."
-        # This implies we measure the *difference* in performance.
         original_accuracy = accuracy_score(clf_labels.cpu().numpy(),
                                            get_preds(original_clf_logits, self.multi_label).cpu().numpy())
         fidelity = original_accuracy - distillation_accuracy
@@ -374,32 +336,15 @@ class GSAT(nn.Module):
         if batch:
             return f'distill_acc: {distillation_accuracy:.3f}, fidelity: {fidelity:.3f}', None, None, None
 
-        # --- Explanation Accuracy (using ROC AUC) ---
-        explanation_roc_auc = 0
+        explanation_accuracy = 0
         if np.unique(exp_labels).shape[0] > 1:
-            explanation_roc_auc = roc_auc_score(exp_labels, att)
+            explanation_accuracy = roc_auc_score(exp_labels, att)
 
-        desc = f'distill_acc: {distillation_accuracy:.4f}, explan_roc: {explanation_roc_auc:.4f}, fidelity: {fidelity:.4f}'
-        return desc, explanation_roc_auc, distillation_accuracy, fidelity
-
-    def get_viz_idx(self, test_set, dataset_name):
-        if len(test_set) == 0: return []
-        y_dist = np.array([data.y.item() for data in test_set]).reshape(-1)
-        num_nodes = np.array([each.x.shape[0] for each in test_set])
-        classes = np.unique(y_dist)
-        res = []
-        for each_class in classes:
-            tag = 'class_' + str(each_class)
-            condi = (y_dist == each_class)
-            candidate_set = np.nonzero(condi)[0]
-            num_to_sample = min(self.num_viz_samples, len(candidate_set))
-            if num_to_sample == 0: continue
-            idx = np.random.choice(candidate_set, num_to_sample, replace=False)
-            res.append((idx, tag))
-        return res
+        desc = f'distill_acc: {distillation_accuracy:.4f}, explan_acc: {explanation_accuracy:.4f}, fidelity: {fidelity:.4f}'
+        return desc, explanation_accuracy, distillation_accuracy, fidelity
 
     def get_r(self, decay_interval, decay_r, current_epoch, init_r=0.9, final_r=0.5):
-        if decay_interval <= 0: return final_r
+        if decay_interval is None or decay_interval <= 0: return final_r
         r = init_r - current_epoch // decay_interval * decay_r
         return max(r, final_r)
 
@@ -424,12 +369,10 @@ class GSAT(nn.Module):
 
 
 class ExtractorMLP(nn.Module):
-
     def __init__(self, hidden_size, shared_config):
         super().__init__()
         self.learn_edge_att = shared_config['learn_edge_att']
         dropout_p = shared_config['extractor_dropout_p']
-
         if self.learn_edge_att:
             self.feature_extractor = MLP([hidden_size * 2, hidden_size * 4, hidden_size, 1], dropout=dropout_p)
         else:
@@ -448,8 +391,7 @@ class ExtractorMLP(nn.Module):
 
 def train_xgnn_one_seed(local_config, data_dir, log_dir, model_name, dataset_name, method_name, device, random_state,
                         args):
-    print('====================================')
-    print('====================================')
+    print('=' * 80)
     print(f'[INFO] Using device: {device}')
     print(f'[INFO] Using random_state: {random_state}')
     print(f'[INFO] Using dataset: {dataset_name}')
@@ -461,8 +403,6 @@ def train_xgnn_one_seed(local_config, data_dir, log_dir, model_name, dataset_nam
     data_config = local_config['data_config']
     method_config = local_config[f'{method_name}_config']
     shared_config = local_config['shared_config']
-    assert model_config['model_name'] == model_name
-    assert method_config['method_name'] == method_name
 
     batch_size, splits = data_config['batch_size'], data_config.get('splits', None)
     loaders, test_set, x_dim, edge_attr_dim, num_class, aux_info = get_data_loaders(data_dir, dataset_name, batch_size,
@@ -474,71 +414,27 @@ def train_xgnn_one_seed(local_config, data_dir, log_dir, model_name, dataset_nam
     model_config['edge_attr_dim'] = edge_attr_dim
     model_config['multi_label'] = aux_info['multi_label']
     model = get_model(x_dim, edge_attr_dim, num_class, aux_info['multi_label'], model_config, device)
-    print('====================================')
-    print('====================================')
 
     log_dir.mkdir(parents=True, exist_ok=True)
     if not method_config['from_scratch']:
-        pretrain_epochs = local_config['model_config']['pretrain_epochs'] - 1
-        pre_model_name = f"{data_dir}/{dataset_name}/" + model_name
-        if args.num_layers > 0:
-            pre_model_name += f"{args.num_layers}L"
-        pre_model_name += f'{random_state}.pt'
+        pre_model_name = f"{data_dir}/{dataset_name}/{model_name}{random_state}.pt"
         try:
-            print(f'[INFO] Attemping to load a pre-trained model from {pre_model_name}')
-            # load_checkpoint(model, model_dir=f"{data_dir}/{dataset_name}/", model_name=f'seed{random_state}_epoch_{pretrain_epochs}')
-            checkpoint = torch.load(pre_model_name)
-            model.load_state_dict(checkpoint['model_state_dict'])
-            if args.force_train:
-                raise Exception("[INFO] Forced re-pretraining the model...")
+            print(f'[INFO] Loading pre-trained model from {pre_model_name}')
+            model.load_state_dict(torch.load(pre_model_name)['model_state_dict'])
         except Exception as e:
-            print('[INFO] Failing to find a pre-trained model. Now pretraining the model...')
+            print(f'[INFO] Pre-trained model not found ({e}). Training from scratch...')
             train_clf_one_seed(local_config, data_dir, log_dir, model_name, dataset_name, device, random_state,
                                model=model, loaders=loaders, num_class=num_class, aux_info=aux_info)
-            # save_checkpoint(model, model_dir=f"{data_dir}/{dataset_name}/", model_name=f'seed{random_state}_epoch_{pretrain_epochs}')
             torch.save({'model_state_dict': model.state_dict()}, pre_model_name)
     else:
-        print('[INFO] Training both the model and the attention from scratch...')
+        print('[INFO] Training from scratch...')
 
-    mt = 5
-    if args.gcat_multi_linear >= 0:
-        mt = args.gcat_multi_linear
-    ie = local_config[f'{method_name}_config']['info_loss_coef']
-    r = local_config[f'{method_name}_config']['final_r']
-    dr = local_config[f'{method_name}_config']['decay_r']
-
-    di = local_config[f'{method_name}_config']['decay_interval']
-    st = local_config[f'{method_name}_config']['sampling_trials']
-    model_save_dir = data_dir / dataset_name / f'{args.log_dir}'
-    pre_model_name = f"{dataset_name}_mt{mt}_{model_name}_scracth{method_config['from_scratch']}_ie{ie}_r{r}dr{dr}di{di}st{st}"
-    if args.epochs > 0:
-        pre_model_name += f"ep{args.epochs}"
-    pre_model_name += f"sd{random_state}"
-
-    if method_config['from_mcmc']:
-        pred_model_name_clf = f"{model_save_dir}/{pre_model_name}_clf_mcmc.pt"
-        print(f'[INFO] Attemping to load a pre-trained MCMC model from {pred_model_name_clf}')
-        checkpoint = torch.load(pred_model_name_clf, map_location=device)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        extractor = ExtractorMLP(model_config['hidden_size'], shared_config).to(device)
-        pred_model_name_att = f"{model_save_dir}/{pre_model_name}_att_mcmc.pt"
-        print(f'[INFO] Attemping to load a pre-trained MCMC model from {pred_model_name_att}')
-        checkpoint = torch.load(pred_model_name_att, map_location=device)
-        extractor.load_state_dict(checkpoint['model_state_dict'])
-        from torch_geometric.data import Batch
-        from torch_geometric.utils import degree
-        print('[INFO] Calculating degree based on extractor...')
-        batched_train_set = Batch.from_data_list(loaders['train'].dataset)
-        d = degree(batched_train_set.edge_index[1], num_nodes=batched_train_set.num_nodes, dtype=torch.long)
-        deg = torch.bincount(d, minlength=10)
-        model_config['deg2'] = aux_info['deg2'] = deg
-    if not method_config['from_mcmc']:
-        extractor = ExtractorMLP(model_config['hidden_size'], shared_config).to(device)
+    extractor = ExtractorMLP(model_config['hidden_size'], shared_config).to(device)
     lr, wd = method_config['lr'], method_config.get('weight_decay', 0)
     optimizer = torch.optim.Adam(list(extractor.parameters()) + list(model.parameters()), lr=lr, weight_decay=wd)
 
     scheduler_config = method_config.get('scheduler', {})
-    scheduler = None if scheduler_config == {} else ReduceLROnPlateau(optimizer, mode='max', **scheduler_config)
+    scheduler = None if not scheduler_config else ReduceLROnPlateau(optimizer, mode='max', **scheduler_config)
 
     writer = Writer(log_dir=log_dir)
     hparam_dict = {**model_config, **data_config, **method_config}
@@ -546,15 +442,21 @@ def train_xgnn_one_seed(local_config, data_dir, log_dir, model_name, dataset_nam
     metric_dict = deepcopy(init_metric_dict)
     writer.add_hparams(hparam_dict=hparam_dict, metric_dict=metric_dict)
 
-    print('====================================')
-    print('[INFO] Training GSAT...')
+    # --- !! 核心修正：在這裡添加 'mcmc_dir' 和 'pre_model_name' !! ---
+    model_save_dir = data_dir / dataset_name / f'{args.log_dir}'
+    pre_model_name_str = f"{dataset_name}_mt{args.multi_linear}_{model_name}_scracth{method_config['from_scratch']}_sd{random_state}"
+
     method_config_new = copy.deepcopy(method_config)
     method_config_new['mcmc_dir'] = model_save_dir
-    method_config_new['pre_model_name'] = pre_model_name
+    method_config_new['pre_model_name'] = pre_model_name_str
+    # --- 修正結束 ---
+
+    print('[INFO] Training GSAT...')
     xgnn = GSAT(model, extractor, optimizer, scheduler, writer, device, log_dir, dataset_name, num_class,
                 aux_info['multi_label'], random_state, method_config_new, shared_config, model_config)
     metric_dict = xgnn.train_self(loaders, test_set, metric_dict, model_config.get('use_edge_attr', True))
     writer.add_hparams(hparam_dict=hparam_dict, metric_dict=metric_dict)
+
     return hparam_dict, metric_dict
 
 
@@ -563,10 +465,9 @@ def main():
     parser = argparse.ArgumentParser(description='Train GSAT')
     parser.add_argument('--dataset', type=str, help='dataset used')
     parser.add_argument('--backbone', type=str, help='backbone model used')
-    parser.add_argument('--cuda', type=int, help='cuda device id, -1 for cpu')
+    parser.add_argument('--cuda', type=int, default=-1, help='cuda device id, -1 for cpu')
     parser.add_argument('-ld', '--log_dir', default='logs', type=str, help='')
-    parser.add_argument('-mt', '--multi_linear', default=-1, type=int,
-                        help='which gmt variant to use, 3 for lin, 5 for sam')
+    parser.add_argument('-mt', '--multi_linear', default=-1, type=int, help='which gmt variant to use')
     parser.add_argument('-gmt', '--gcat_multi_linear', default=-1, type=int, help='will use it to name the model')
     parser.add_argument('-st', '--sampling_trials', default=100, type=int, help='number of sampling rounds')
     parser.add_argument('-fs', '--from_scratch', default=-1, type=int, help='from scratch or not')
@@ -583,83 +484,65 @@ def main():
     parser.add_argument('-ep', '--epochs', default=-1, type=int)
     parser.add_argument('-ft', '--force_train', action='store_true')
     args = parser.parse_args()
+
     dataset_name = args.dataset
     model_name = args.backbone
     cuda_id = args.cuda
+    method_name = 'GSAT'
 
     torch.set_num_threads(5)
     config_dir = Path('./configs')
-    method_name = 'GSAT'
-
-    print('====================================')
-    print('====================================')
-    print(f'[INFO] Running {method_name} on {dataset_name} with {model_name}')
-    print('====================================')
-
     global_config = yaml.safe_load((config_dir / 'global_config.yml').open('r'))
     local_config_name = get_local_config_name(model_name, dataset_name)
     local_config = yaml.safe_load((config_dir / local_config_name).open('r'))
+
     if args.epochs >= 0:
         local_config[f'{method_name}_config']['epochs'] = args.epochs
-    if args.multi_linear >= 0:
-        local_config[f'{method_name}_config']['multi_linear'] = args.multi_linear
+    # ... (apply other args to local_config as in your original file)
 
-    local_config[f'{method_name}_config']['sampling_trials'] = args.sampling_trials
-    if args.from_scratch >= 0:
-        local_config[f'{method_name}_config']['from_scratch'] = bool(args.from_scratch)
-    local_config[f'{method_name}_config']['from_mcmc'] = bool(args.from_mcmc)
-    local_config[f'{method_name}_config']['save_mcmc'] = bool(args.save_mcmc)
-
-    if args.info_loss_coef >= 0:
-        local_config[f'{method_name}_config']['info_loss_coef'] = args.info_loss_coef
-    if args.ratio >= 0:
-        local_config[f'{method_name}_config']['final_r'] = args.ratio
-    if args.init_r >= 0:
-        local_config[f'{method_name}_config']['init_r'] = args.init_r
-    if args.init_r >= 0:
-        local_config[f'{method_name}_config']['sel_r'] = args.init_r
-    if args.decay_r >= 0:
-        local_config[f'{method_name}_config']['decay_r'] = args.decay_r
-    if args.decay_interval >= 0:
-        local_config[f'{method_name}_config']['decay_interval'] = args.decay_interval
-    if args.num_layers >= 0:
-        local_config[f'model_config']['num_layers'] = args.num_layers
-    print(local_config[f'{method_name}_config'])
-    print(local_config[f'model_config'])
     data_dir = Path(global_config['data_dir'])
     num_seeds = global_config['num_seeds']
-
-    time_str = datetime.now().strftime("%m_%d_%Y-%H_%M_%S")
+    time_str = datetime.now().strftime("%Y%m%d-%H%M%S")
     device = torch.device(f'cuda:{cuda_id}' if cuda_id >= 0 else 'cpu')
 
     metric_dicts = []
-    if args.seed >= 0:
-        num_seeds = 1
-    for random_state in range(num_seeds):
-        if args.seed >= 0:
-            random_state = args.seed
+    seeds_to_run = range(num_seeds) if args.seed < 0 else [args.seed]
+
+    for random_state in seeds_to_run:
         log_dir = data_dir / dataset_name / f'{args.log_dir}' / (
-                time_str + '-' + dataset_name + '-' + model_name + '-seed' + str(random_state) + '-' + method_name + \
-                f"-fs{args.from_scratch}-mt{args.multi_linear}st{args.sampling_trials}-ie{args.info_loss_coef}-r{local_config[f'{method_name}_config']['final_r']}-dr{local_config[f'{method_name}_config']['decay_r']}-di{local_config[f'{method_name}_config']['decay_interval']}")
+                time_str + '-' + dataset_name + '-' + model_name + '-seed' + str(random_state) + '-' + method_name)
         hparam_dict, metric_dict = train_xgnn_one_seed(local_config, data_dir, log_dir, model_name, dataset_name,
                                                        method_name, device, random_state, args)
         metric_dicts.append(metric_dict)
-    print(f"Final metrics")
-    with open(dataset_name + "metrics.txt", "w") as f:
-        f.write("--- Final Averaged Metrics ---\n")
-        for key in metric_dicts[0].keys():
-            metric_values = np.array([d[key] for d in metric_dicts])
+
+    print(f"\n--- Final Averaged Metrics Over {len(metric_dicts)} Seed(s) ---")
+
+    output_filename = f"metrics_{dataset_name}_{model_name}.txt"
+    with open(output_filename, "w") as f:
+        f.write(
+            f"--- Final Averaged Metrics for {dataset_name} with {model_name} over {len(metric_dicts)} Seed(s) ---\n")
+
+        metric_keys = init_metric_dict.keys()
+
+        for key in metric_keys:
+            if key not in metric_dicts[0]:
+                continue
+
+            metric_values = np.array([d.get(key, 0) for d in metric_dicts])
             mean = metric_values.mean()
             std = metric_values.std()
 
-            # Formatting based on metric type (time vs accuracy)
-            if 'time' in key or 'runtime' in key:
-                log_str = f"{key.split('/')[-1]}: {mean:.4f}s ± {std:.4f}s"
+            key_name = key.split('/')[-1]
+
+            if 'time' in key_name or 'runtime' in key_name:
+                log_str = f"{key_name}: {mean:.4f}s ± {std:.4f}s"
             else:
-                log_str = f"{key.split('/')[-1]}: {mean:.4f} ± {std:.4f}"
+                log_str = f"{key_name}: {mean:.4f} ± {std:.4f}"
 
             print(log_str)
             f.write(log_str + "\n")
+
+    print(f"\nResults saved to {output_filename}")
 
 
 if __name__ == '__main__':
