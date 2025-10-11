@@ -9,10 +9,16 @@ from torch_geometric.utils import to_networkx, sort_edge_index
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.tensorboard.summary import hparams
 
-init_metric_dict = {'metric/best_clf_epoch': 0, 'metric/best_clf_valid_loss': 0,
-                    'metric/explanation_accuracy': 0, 'metric/distillation_time': 0,
-                    'metric/overall_runtime': 0, 'metric/distillation_accuracy': 0,
-                    'metric/fidelity': 0}
+# Updated metric dictionary with new names
+init_metric_dict = {
+    'metric/best_epoch': 0,
+    'metric/best_val_loss': 0.0,
+    'metric/explanation_roc_auc': 0.0,  # Corresponds to Explanation Accuracy
+    'metric/distillation_time': 0.0,
+    'metric/overall_runtime': 0.0,
+    'metric/distillation_accuracy': 0.0,
+    'metric/fidelity': 0.0
+}
 
 
 def reorder_like(from_edge_index, to_edge_index, values):
@@ -82,7 +88,9 @@ def set_seed(seed):
 
 
 class Writer(SummaryWriter):
-    def add_hparams(self, hparam_dict, metric_dict, hparam_domain_discrete=None, run_name=None):
+    def add_hparams(
+            self, hparam_dict, metric_dict, hparam_domain_discrete=None, run_name=None
+    ):
         torch._C._log_api_usage_once("tensorboard.logging.add_hparams")
         if type(hparam_dict) is not dict or type(metric_dict) is not dict:
             raise TypeError('hparam_dict and metric_dict should be dictionary.')
@@ -111,7 +119,8 @@ def visualize_a_graph(edge_index, edge_att, node_label, dataset_name, coor=None,
             node_colors[y_idx] = atom_colors[node_label[y_idx].int().tolist()]
     else:
         node_color = ['#29A329', 'lime', '#F0EA00', 'maroon', 'brown', '#E49D1C', '#4970C6', '#FF5357']
-        element_idxs = {k: Chem.PeriodicTable.GetAtomicNumber(Chem.GetPeriodicTable(), v) for k, v in mol_type.items()}
+        element_idxs = {k: Chem.PeriodicTable.GetAtomicNumber(Chem.GetPeriodicTable(), v) for k, v in
+                        mol_type.items()}
         node_colors = [node_color[(v - 1) % len(node_color)] for k, v in element_idxs.items()]
 
     data = Data(edge_index=edge_index, att=edge_att, y=node_label, num_nodes=node_label.size(0)).to('cpu')
