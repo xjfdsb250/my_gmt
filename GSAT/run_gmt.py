@@ -228,14 +228,15 @@ class GSAT(nn.Module):
         for idx, data in enumerate(pbar):
             data = process_data(data, use_edge_attr)
             att, loss_dict, clf_logits = run_one_batch(data.to(self.device), epoch)
-
+            has_edges_mask = torch.tensor([g.edge_index.numel() > 0 for g in data.to_data_list()], dtype=torch.bool)
             with torch.no_grad():
                 device_data = data.to(self.device)
                 original_clf_logits = self.clf(device_data.x, device_data.edge_index, device_data.batch,
                                                edge_attr=device_data.edge_attr)
 
             desc, _, _, _, _ = self.log_epoch(epoch, phase_str, loss_dict, data.edge_label.data.cpu(), att,
-                                              data.y.data.cpu(), clf_logits, original_clf_logits.data.cpu(), batch=True)
+                                              data.y.data.cpu(), clf_logits, original_clf_logits.data.cpu(), batch=True,
+                                              has_edges_mask=has_edges_mask)
             for k, v in loss_dict.items():
                 all_loss_dict[k] = all_loss_dict.get(k, 0) + v
 
@@ -251,13 +252,17 @@ class GSAT(nn.Module):
                 all_clf_labels = torch.cat(all_clf_labels)
                 all_clf_logits = torch.cat(all_clf_logits)
                 all_original_clf_logits = torch.cat(all_original_clf_logits)
+                all_has_edges_mask = torch.cat(
+                    [torch.tensor([g.edge_index.numel() > 0 for g in batch.to_data_list()], dtype=torch.bool) for batch
+                     in data_loader])
 
                 for k, v in all_loss_dict.items():
                     all_loss_dict[k] = v / loader_len
 
                 desc, explanation_accuracy, distillation_accuracy, fidelity, avg_loss = self.log_epoch(
                     epoch, phase_str, all_loss_dict, all_exp_labels, all_att,
-                    all_clf_labels, all_clf_logits, all_original_clf_logits, batch=False)
+                    all_clf_labels, all_clf_logits, all_original_clf_logits, batch=False,
+                    has_edges_mask=all_has_edges_mask)
             pbar.set_description(desc)
 
         return explanation_accuracy, distillation_accuracy, fidelity, avg_loss
@@ -308,7 +313,8 @@ class GSAT(nn.Module):
 
         return metric_dict
 
-    def log_epoch(self, epoch, phase, loss_dict, exp_labels, att, clf_labels, clf_logits, original_clf_logits, batch):
+    def log_epoch(self, epoch, phase, loss_dict, exp_labels, att, clf_labels, clf_logits, original_clf_logits, batch,
+                  has_edges_mask=None):
         desc = f'[Seed {self.random_state}, Epoch: {epoch}]: {phase}..., ' if batch else f'[Seed {self.random_state}, Epoch: {epoch}]: {phase} finished, '
         for k, v in loss_dict.items():
             if not batch:
@@ -316,7 +322,7 @@ class GSAT(nn.Module):
             desc += f'{k}: {v:.3f}, '
 
         eval_desc, explanation_accuracy, distillation_accuracy, fidelity = self.get_eval_score(
-            exp_labels, att, clf_labels, clf_logits, original_clf_logits, batch)
+            exp_labels, att, clf_labels, clf_logits, original_clf_logits, batch, has_edges_mask=has_edges_mask)
         desc += eval_desc
 
         if not batch:
@@ -326,12 +332,23 @@ class GSAT(nn.Module):
 
         return desc, explanation_accuracy, distillation_accuracy, fidelity, loss_dict['pred']
 
-    def get_eval_score(self, exp_labels, att, clf_labels, clf_logits, original_clf_logits, batch):
+    def get_eval_score(self, exp_labels, att, clf_labels, clf_logits, original_clf_logits, batch, has_edges_mask=None):
         distillation_accuracy = accuracy_score(clf_labels.cpu().numpy(),
                                                get_preds(clf_logits, self.multi_label).cpu().numpy())
         original_accuracy = accuracy_score(clf_labels.cpu().numpy(),
                                            get_preds(original_clf_logits, self.multi_label).cpu().numpy())
-        fidelity = original_accuracy - distillation_accuracy
+        if has_edges_mask is not None and has_edges_mask.any():
+            # 只在有边的图上计算保真度
+            original_accuracy_on_edged = accuracy_score(clf_labels[has_edges_mask].cpu().numpy(),
+                                                        get_preds(original_clf_logits[has_edges_mask],
+                                                                  self.multi_label).cpu().numpy())
+            distillation_accuracy_on_edged = accuracy_score(clf_labels[has_edges_mask].cpu().numpy(),
+                                                            get_preds(clf_logits[has_edges_mask],
+                                                                      self.multi_label).cpu().numpy())
+            fidelity = original_accuracy_on_edged - distillation_accuracy_on_edged
+        else:
+            # 如果没有提供mask或者所有图都没有边，则fidelity为0
+            fidelity = 0.0
 
         if batch:
             return f'distill_acc: {distillation_accuracy:.3f}, fidelity: {fidelity:.3f}', None, None, None

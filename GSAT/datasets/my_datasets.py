@@ -112,6 +112,9 @@ class MyGraphClassificationDataset(InMemoryDataset):
 
             edge_index = dense_to_sparse(torch.from_numpy(adj_matrix).float())[0]
 
+            if edge_index.numel() == 0:
+                print(f"[DEBUG] Graph {i} in dataset '{self.name}' has no edges.")
+
             if node_features.ndim == 1:
                 node_features = node_features.reshape(-1, 1)
 
