@@ -20,7 +20,8 @@ init_metric_dict = {
     'metric/distillation_time': 0.0,
     'metric/overall_runtime': 0.0,
     'metric/distillation_accuracy': 0.0,
-    'metric/fidelity': 0.0
+    'metric/fidelity': 0.0,
+    'metric/AUC': 0.0
 }
 
 

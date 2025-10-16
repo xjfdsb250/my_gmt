@@ -26,6 +26,7 @@ from utils import Writer, Criterion, MLP, visualize_a_graph, save_checkpoint, lo
     set_seed, process_data, relabel
 from utils import get_local_config_name, get_model, get_data_loaders, write_stat_from_metric_dicts, reorder_like, \
     init_metric_dict
+from sklearn.metrics import roc_auc_score, accuracy_score
 
 
 class GSAT(nn.Module):
@@ -234,9 +235,10 @@ class GSAT(nn.Module):
                 original_clf_logits = self.clf(device_data.x, device_data.edge_index, device_data.batch,
                                                edge_attr=device_data.edge_attr)
 
-            desc, _, _, _, _ = self.log_epoch(epoch, phase_str, loss_dict, data.edge_label.data.cpu(), att,
-                                              data.y.data.cpu(), clf_logits, original_clf_logits.data.cpu(), batch=True,
-                                              has_edges_mask=has_edges_mask)
+            desc, _, _, _, _, _ = self.log_epoch(epoch, phase_str, loss_dict, data.edge_label.data.cpu(), att,
+                                                 data.y.data.cpu(), clf_logits, original_clf_logits.data.cpu(),
+                                                 batch=True,
+                                                 has_edges_mask=has_edges_mask)
             for k, v in loss_dict.items():
                 all_loss_dict[k] = all_loss_dict.get(k, 0) + v
 
@@ -259,13 +261,13 @@ class GSAT(nn.Module):
                 for k, v in all_loss_dict.items():
                     all_loss_dict[k] = v / loader_len
 
-                desc, explanation_accuracy, distillation_accuracy, fidelity, avg_loss = self.log_epoch(
+                desc, explanation_accuracy, distillation_accuracy, fidelity, avg_loss, auc = self.log_epoch(
                     epoch, phase_str, all_loss_dict, all_exp_labels, all_att,
                     all_clf_labels, all_clf_logits, all_original_clf_logits, batch=False,
                     has_edges_mask=all_has_edges_mask)
             pbar.set_description(desc)
 
-        return explanation_accuracy, distillation_accuracy, fidelity, avg_loss
+        return explanation_accuracy, distillation_accuracy, fidelity, avg_loss, auc
 
     def train_self(self, loaders, test_set, metric_dict, use_edge_attr):
         distillation_start_time = time.time()
@@ -290,7 +292,8 @@ class GSAT(nn.Module):
                     'metric/explanation_accuracy': test_res[0],
                     'metric/distillation_time': distillation_time,
                     'metric/distillation_accuracy': test_res[1],
-                    'metric/fidelity': test_res[2]
+                    'metric/fidelity': test_res[2],
+                    'metric/AUC': test_res[4]
                 })
                 if self.save_mcmc:
                     save_checkpoint(self.clf, self.mcmc_dir, model_name=self.pre_model_name + f"_clf_mcmc")
@@ -302,7 +305,8 @@ class GSAT(nn.Module):
             print(f'[Seed {self.random_state}, Epoch: {epoch}]: Best Epoch: {metric_dict["metric/best_epoch"]}, '
                   f'Test Distill Acc: {metric_dict["metric/distillation_accuracy"]:.4f}, '
                   f'Test Explan Acc: {metric_dict["metric/explanation_accuracy"]:.4f}, '
-                  f'Test Fidelity: {metric_dict["metric/fidelity"]:.4f}')
+                  f'Test Fidelity: {metric_dict["metric/fidelity"]:.4f},'
+                  f' Test AUC: {metric_dict["metric/AUC"]:.4f}')
             print('=' * 80)
 
         explanation_extraction_start_time = time.time()
@@ -321,7 +325,7 @@ class GSAT(nn.Module):
                 self.writer.add_scalar(f'{phase}/{k}', v, epoch)
             desc += f'{k}: {v:.3f}, '
 
-        eval_desc, explanation_accuracy, distillation_accuracy, fidelity = self.get_eval_score(
+        eval_desc, explanation_accuracy, distillation_accuracy, fidelity, auc = self.get_eval_score(
             exp_labels, att, clf_labels, clf_logits, original_clf_logits, batch, has_edges_mask=has_edges_mask)
         desc += eval_desc
 
@@ -329,8 +333,9 @@ class GSAT(nn.Module):
             self.writer.add_scalar(f'{phase}/explanation_accuracy', explanation_accuracy, epoch)
             self.writer.add_scalar(f'{phase}/distillation_accuracy', distillation_accuracy, epoch)
             self.writer.add_scalar(f'{phase}/fidelity', fidelity, epoch)
+            self.writer.add_scalar(f'{phase}/AUC', auc, epoch)
 
-        return desc, explanation_accuracy, distillation_accuracy, fidelity, loss_dict['pred']
+        return desc, explanation_accuracy, distillation_accuracy, fidelity, loss_dict['pred'], auc
 
     def get_eval_score(self, exp_labels, att, clf_labels, clf_logits, original_clf_logits, batch, has_edges_mask=None):
         distillation_accuracy = accuracy_score(clf_labels.cpu().numpy(),
@@ -351,14 +356,35 @@ class GSAT(nn.Module):
             fidelity = 0.0
 
         if batch:
-            return f'distill_acc: {distillation_accuracy:.3f}, fidelity: {fidelity:.3f}', None, None, None
+            return f'distill_acc: {distillation_accuracy:.3f}, fidelity: {fidelity:.3f}', None, None, None, None
 
         explanation_accuracy = 0
         if np.unique(exp_labels).shape[0] > 1:
             explanation_accuracy = roc_auc_score(exp_labels, att)
 
-        desc = f'distill_acc: {distillation_accuracy:.4f}, explan_acc: {explanation_accuracy:.4f}, fidelity: {fidelity:.4f}'
-        return desc, explanation_accuracy, distillation_accuracy, fidelity
+        auc = 0.0
+        # 将logits转换为概率分布
+        y_true = clf_labels.cpu().numpy()
+        y_scores = F.softmax(clf_logits, dim=-1).cpu().numpy()
+
+        # 检查是否存在多个类别，以避免计算错误
+        if len(np.unique(y_true)) > 1:
+            if not self.multi_label and y_scores.shape[1] > 2:
+                # 使用 'ovr' (One-vs-Rest) 策略计算多分类AUC
+                try:
+                    auc = roc_auc_score(y_true, y_scores, multi_class='ovr', average='macro')
+                except ValueError:
+                    # 在某些批次中可能只有一个类别，导致AUC无法计算
+                    pass
+            elif not self.multi_label and y_scores.shape[1] == 2:
+                # 二分类问题的标准AUC计算
+                try:
+                    auc = roc_auc_score(y_true, y_scores[:, 1])
+                except ValueError:
+                    pass
+
+        desc = f'distill_acc: {distillation_accuracy:.4f}, explan_acc: {explanation_accuracy:.4f}, fidelity: {fidelity:.4f}, auc: {auc:.4f}'
+        return desc, explanation_accuracy, distillation_accuracy, fidelity, auc
 
     def get_r(self, decay_interval, decay_r, current_epoch, init_r=0.9, final_r=0.5):
         if decay_interval is None or decay_interval <= 0: return final_r
