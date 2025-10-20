@@ -1,8 +1,9 @@
 --- Final Averaged Metrics for ba_grids with GIN over 10 Seed(s) ---
-best_epoch: 77.5000 ± 24.7921
-best_val_loss: 0.0522 ± 0.0315
-explanation_accuracy: 0.4709 ± 0.1979
-distillation_time: 31.8672s ± 9.9673s
-overall_runtime: 31.8910s ± 9.9694s
-distillation_accuracy: 0.9794 ± 0.0142
-fidelity: -0.0029 ± 0.0063
+best_epoch: 85.3000 ± 14.5468
+best_val_loss: 0.0518 ± 0.0307
+explanation_accuracy: 0.4516 ± 0.1935
+distillation_time: 86.8221s ± 16.8811s
+overall_runtime: 86.9062s ± 16.8862s
+distillation_accuracy: 0.9824 ± 0.0130
+fidelity: -0.0198 ± 0.0331
+AUC: 0.0000 ± 0.0000
