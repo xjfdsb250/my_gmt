@@ -365,23 +365,27 @@ class GSAT(nn.Module):
         auc = 0.0
         # 将logits转换为概率分布
         y_true = clf_labels.cpu().numpy()
-        y_scores = F.softmax(clf_logits, dim=-1).cpu().numpy()
 
-        # 检查是否存在多个类别，以避免计算错误
         if len(np.unique(y_true)) > 1:
-            if not self.multi_label and y_scores.shape[1] > 2:
-                # 使用 'ovr' (One-vs-Rest) 策略计算多分类AUC
-                try:
-                    auc = roc_auc_score(y_true, y_scores, multi_class='ovr', average='macro')
-                except ValueError:
-                    # 在某些批次中可能只有一个类别，导致AUC无法计算
-                    pass
-            elif not self.multi_label and y_scores.shape[1] == 2:
-                # 二分类问题的标准AUC计算
-                try:
-                    auc = roc_auc_score(y_true, y_scores[:, 1])
-                except ValueError:
-                    pass
+            if not self.multi_label:
+                if clf_logits.shape[1] > 2:
+                    y_scores = F.softmax(clf_logits, dim=-1).cpu().numpy()
+                    try:
+                        auc = roc_auc_score(y_true, y_scores, multi_class='ovr', average='macro')
+                    except ValueError:
+                        pass
+                elif clf_logits.shape[1] == 2:
+                    y_scores = F.softmax(clf_logits, dim=-1).cpu().numpy()
+                    try:
+                        auc = roc_auc_score(y_true, y_scores[:, 1])
+                    except ValueError:
+                        pass
+                elif clf_logits.shape[1] == 1:
+                    y_scores = clf_logits.cpu().numpy()
+                    try:
+                        auc = roc_auc_score(y_true, y_scores)
+                    except ValueError:
+                        pass
 
         desc = f'distill_acc: {distillation_accuracy:.4f}, explan_acc: {explanation_accuracy:.4f}, fidelity: {fidelity:.4f}, auc: {auc:.4f}'
         return desc, explanation_accuracy, distillation_accuracy, fidelity, auc

@@ -7,7 +7,8 @@ from torch_geometric.loader import DataLoader
 from ogb.graphproppred import PygGraphPropPredDataset
 from datasets import SynGraphDataset, Mutag, SPMotif, MNIST75sp, graph_sst2
 from datasets.my_datasets import MyGraphClassificationDataset
-from datasets.tree_dataset import TreeDataset
+# from datasets.tree_dataset import TreeDataset
+from datasets.dgl_tree_datasets import DGLTreeDataset as TreeDataset
 
 
 def get_data_loaders(data_dir, dataset_name, batch_size, splits, random_state, mutag_x=False):
