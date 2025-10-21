@@ -1,8 +1,9 @@
 --- Final Averaged Metrics for tree_grids with GIN over 10 Seed(s) ---
-best_epoch: 30.6000 ± 44.7888
-best_val_loss: 0.6101 ± 0.0448
-explanation_accuracy: 0.3891 ± 0.3261
-distillation_time: 15.1338s ± 21.1185s
-overall_runtime: 15.1591s ± 21.1184s
-distillation_accuracy: 0.7387 ± 0.0315
-fidelity: 0.0000 ± 0.0000
+best_epoch: 98.9000 ± 0.3000
+best_val_loss: 0.5633 ± 0.0052
+explanation_accuracy: 0.3944 ± 0.0882
+distillation_time: 85.0517s ± 5.1287s
+overall_runtime: 85.1185s ± 5.1332s
+distillation_accuracy: 0.7166 ± 0.0056
+fidelity: 0.0055 ± 0.0144
+AUC: 0.6715 ± 0.0112

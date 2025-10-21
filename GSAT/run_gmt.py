@@ -285,15 +285,18 @@ class GSAT(nn.Module):
                         'metric/best_val_loss'])):
 
                 distillation_time = time.time() - distillation_start_time
-
+                if 'tree' in self.dataset_name.lower():
+                    final_metrics_res = train_res
+                else:
+                    final_metrics_res = test_res
                 metric_dict.update({
                     'metric/best_epoch': epoch,
                     'metric/best_val_loss': valid_res[3],
-                    'metric/explanation_accuracy': test_res[0],
+                    'metric/explanation_accuracy': final_metrics_res[0],
                     'metric/distillation_time': distillation_time,
-                    'metric/distillation_accuracy': test_res[1],
-                    'metric/fidelity': test_res[2],
-                    'metric/AUC': test_res[4]
+                    'metric/distillation_accuracy': final_metrics_res[1],
+                    'metric/fidelity': final_metrics_res[2],
+                    'metric/AUC': final_metrics_res[4]
                 })
                 if self.save_mcmc:
                     save_checkpoint(self.clf, self.mcmc_dir, model_name=self.pre_model_name + f"_clf_mcmc")

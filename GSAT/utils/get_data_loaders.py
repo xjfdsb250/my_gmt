@@ -7,8 +7,7 @@ from torch_geometric.loader import DataLoader
 from ogb.graphproppred import PygGraphPropPredDataset
 from datasets import SynGraphDataset, Mutag, SPMotif, MNIST75sp, graph_sst2
 from datasets.my_datasets import MyGraphClassificationDataset
-# from datasets.tree_dataset import TreeDataset
-from datasets.dgl_tree_datasets import DGLTreeDataset as TreeDataset
+from datasets.tree_dataset import TreeDataset
 
 
 def get_data_loaders(data_dir, dataset_name, batch_size, splits, random_state, mutag_x=False):
@@ -134,6 +133,21 @@ def get_random_split_idx(dataset, splits, mutag_x=False):
 def get_loaders_and_test_set(batch_size, dataset=None, split_idx=None, dataset_splits=None):
     if split_idx is not None:
         assert dataset is not None
+        train_indices = split_idx["train"]
+        if len(train_indices) == 0:
+            total_graphs = len(dataset)
+            train_ratio = 0.8  # 假设默认比例，或者从配置中读取
+            try:
+                if total_graphs > 0:
+                    train_ratio = len(split_idx.get("train", [])) / total_graphs
+            except ZeroDivisionError:
+                pass
+
+            raise ValueError(
+                f"错误：根据划分比例 ({train_ratio:.1%}) 计算后，训练集为空。"
+                f" 数据集总大小为 {total_graphs}。"
+                f" 请检查数据集是否过小或划分比例是否合适。"
+            )
         train_loader = DataLoader(dataset[split_idx["train"]], batch_size=batch_size, shuffle=True)
         valid_loader = DataLoader(dataset[split_idx["valid"]], batch_size=batch_size, shuffle=False)
         test_loader = DataLoader(dataset[split_idx["test"]], batch_size=batch_size, shuffle=False)

@@ -1,64 +1,67 @@
-import pickle
 import numpy as np
 
-file_path = './data/ba_community/raw/ba_community.pkl'
+file_path = './data/tree_cycles/raw/tree_cycles_X.npy'
+
+try:
+    data = np.load(file_path, allow_pickle=True)
+
+    # 现在 'data' 变量包含了从 .npy 文件中加载的 NumPy 数组（或对象数组）
+    print(f"成功加载文件: {file_path}")
+    print("-" * 30)
+
+    # 打印数据的基本信息
+    print(f"数据类型: {type(data)}")
+
+    # 检查 data 是否是 NumPy 数组
+    if isinstance(data, np.ndarray):
+        print(f"数组形状 (Shape): {data.shape}")
+        print(f"数组数据类型 (dtype): {data.dtype}")
+        print("-" * 30)
+
+        # 打印数组内容
+        # 注意：如果数组非常大，打印整个数组可能会导致输出过多
+        # 这里我们只打印一部分内容作为示例
+
+        # 如果是一维数组
+        if data.ndim == 1:
+            print("数组内容 (前 10 项):")
+            print(data[:10])
+        # 如果是二维数组
+        elif data.ndim == 2:
+            print("数组内容 (前 5 行，前 10 列):")
+            print(data[:5, :10])
+        # 如果是更高维数组
+        elif data.ndim > 2:
+            print(f"数组内容 (第一个元素，形状 {data[0].shape}):")
+            print(data[0])
+        # 如果是 0 维数组（标量）
+        else:
+            print("数组内容 (标量):")
+            print(data)
+    elif data.dtype == 'object':
+        print("检测到对象数组 (Object Array)。")
+        print(f"数组形状 (Shape): {data.shape}")
+        print("-" * 30)
+        print("对象数组内容 (前 3 个对象):")
+        # 遍历对象数组的前几个元素
+        for i, item in enumerate(data.flat):  # 使用 .flat 迭代所有元素
+            if i >= 3:
+                break
+            print(f"  对象 {i}:")
+            print(f"    类型: {type(item)}")
+            # 如果对象本身是 NumPy 数组，打印其形状
+            if isinstance(item, np.ndarray):
+                print(f"    形状: {item.shape}")
+                print(f"    内容 (前5项/行): {item[:5]}")
+            # 如果是其他类型，直接打印
+            else:
+                print(f"    内容: {item}")
+    else:
+        print("加载的数据不是 NumPy 数组。")
+        print("数据内容:", data)
 
 
-def inspect_pkl(path):
-    """
-    加载并检查 .pkl 文件的内容和结构。
-    """
-    print(f"--- 开始检查文件: {path} ---")
-
-    try:
-        with open(path, 'rb') as f:
-            # 加载数据
-            data = pickle.load(f)
-
-            # 1. 检查整体数据类型
-            print(f"\n[1] 数据的整体类型: {type(data)}")
-
-            # 2. 如果是列表或字典，检查其长度
-            if isinstance(data, (list, dict, tuple)):
-                print(f"[2] 数据的长度 (包含的元素/图的数量): {len(data)}")
-
-                if len(data) > 0:
-                    # 3. 检查第一个元素的结构
-                    first_element = data[0]
-                    print(f"\n[3] 第一个元素的类型: {type(first_element)}")
-
-                    # 4. 如果第一个元素是字典，打印它的键和每个值的类型/形状
-                    if isinstance(first_element, dict):
-                        print("[4] 第一个元素的结构 (键和值的类型/形状):")
-                        for key, value in first_element.items():
-                            if isinstance(value, np.ndarray):
-                                print(f"  - 键: '{key}', 值类型: numpy.ndarray, 形状: {value.shape}")
-                            elif hasattr(value, 'shape'):  # 适用于 PyTorch Tensor 等
-                                print(f"  - 键: '{key}', 值类型: {type(value)}, 形状: {value.shape}")
-                            else:
-                                print(f"  - 键: '{key}', 值类型: {type(value)}")
-
-                    # 如果第一个元素是自定义对象，打印其属性
-                    elif hasattr(first_element, '__dict__'):
-                        print("[4] 第一个元素的属性:")
-                        for attr, value in first_element.__dict__.items():
-                            if isinstance(value, np.ndarray):
-                                print(f"  - 属性: '{attr}', 值类型: numpy.ndarray, 形状: {value.shape}")
-                            else:
-                                print(f"  - 属性: '{attr}', 值类型: {type(value)}")
-
-            else:  # 如果不是列表或字典
-                if isinstance(data, np.ndarray):
-                    print(f"[2] 数据的形状: {data.shape}")
-                elif hasattr(data, 'shape'):
-                    print(f"[2] 数据的形状: {data.shape}")
-    except FileNotFoundError:
-        print(f"错误: 文件 '{path}' 未找到。请确保文件路径正确。")
-    except Exception as e:
-        print(f"加载或检查文件时发生错误: {e}")
-
-    print("\n--- 检查完毕 ---")
-
-
-if __name__ == '__main__':
-    inspect_pkl(file_path)
+except FileNotFoundError:
+    print(f"错误：文件 '{file_path}' 未找到。")
+except Exception as e:
+    print(f"读取或处理文件时发生错误: {e}")
