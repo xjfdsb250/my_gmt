@@ -1,9 +1,9 @@
 --- Final Averaged Metrics for ba_community with GIN over 10 Seed(s) ---
-best_epoch: 44.5000 ± 39.6239
-best_val_loss: 1.3859 ± 0.1199
-explanation_accuracy: 0.4560 ± 0.1830
-distillation_time: 61.8260s ± 53.8076s
-overall_runtime: 61.9511s ± 53.8048s
-distillation_accuracy: 0.4814 ± 0.0499
-fidelity: 0.0163 ± 0.0312
-AUC: 0.7788 ± 0.0188
+best_epoch: 99.0000 ± 0.0000
+best_val_loss: 1.2294 ± 0.0188
+explanation_accuracy: 0.4792 ± 0.0587
+distillation_time: 115.6874s ± 14.6556s
+overall_runtime: 1157.9234s
+distillation_accuracy: 0.4057 ± 0.0114
+fidelity: 0.0094 ± 0.0200
+AUC: 0.7946 ± 0.0023

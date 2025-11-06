@@ -1,9 +1,9 @@
 --- Final Averaged Metrics for ba_bottle_shaped with GIN over 10 Seed(s) ---
-best_epoch: 70.5000 ± 31.8473
-best_val_loss: 0.7152 ± 0.1656
-explanation_accuracy: 0.5604 ± 0.0578
-distillation_time: 52.6080s ± 23.2554s
-overall_runtime: 52.6809s ± 23.2536s
-distillation_accuracy: 0.6843 ± 0.0513
-fidelity: -0.0136 ± 0.0274
-AUC: 0.8414 ± 0.0274
+best_epoch: 89.9000 ± 9.6794
+best_val_loss: 0.5609 ± 0.0359
+explanation_accuracy: 0.4812 ± 0.1037
+distillation_time: 66.3278s ± 8.3759s
+overall_runtime: 729.3976s
+distillation_accuracy: 0.7057 ± 0.0686
+fidelity: -0.0926 ± 0.0926
+AUC: 0.8222 ± 0.0076

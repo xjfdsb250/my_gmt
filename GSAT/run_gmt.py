@@ -312,11 +312,9 @@ class GSAT(nn.Module):
                   f' Test AUC: {metric_dict["metric/AUC"]:.4f}')
             print('=' * 80)
 
-        explanation_extraction_start_time = time.time()
         _ = self.run_one_epoch(loaders['test'], self.epochs, 'test', use_edge_attr)
-        explanation_extraction_time = time.time() - explanation_extraction_start_time
-        metric_dict['metric/overall_runtime'] = metric_dict.get('metric/distillation_time',
-                                                                0) + explanation_extraction_time
+        total_runtime = time.time() - distillation_start_time
+        metric_dict['metric/overall_runtime'] = total_runtime
 
         return metric_dict
 
@@ -584,7 +582,10 @@ def main():
 
             key_name = key.split('/')[-1]
 
-            if 'time' in key_name or 'runtime' in key_name:
+            if 'runtime' in key_name:
+                total = metric_values.sum()
+                log_str = f"{key_name}: {total:.4f}s"
+            elif 'time' in key_name:
                 log_str = f"{key_name}: {mean:.4f}s ± {std:.4f}s"
             else:
                 log_str = f"{key_name}: {mean:.4f} ± {std:.4f}"

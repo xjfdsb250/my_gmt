@@ -1,9 +1,9 @@
 --- Final Averaged Metrics for tree_cycles with GIN over 10 Seed(s) ---
-best_epoch: 6.8000 ± 5.0160
-best_val_loss: 0.6559 ± 0.0806
-explanation_accuracy: 0.7219 ± 0.0944
-distillation_time: 5.2565s ± 3.3127s
-overall_runtime: 5.3264s ± 3.3129s
-distillation_accuracy: 0.6181 ± 0.0052
-fidelity: -0.0011 ± 0.0279
-AUC: 0.6739 ± 0.0107
+best_epoch: 4.3000 ± 1.7349
+best_val_loss: 0.6841 ± 0.1261
+explanation_accuracy: 0.7141 ± 0.0908
+distillation_time: 4.2711s ± 1.3980s
+overall_runtime: 766.5868s
+distillation_accuracy: 0.6211 ± 0.0073
+fidelity: 0.0202 ± 0.0281
+AUC: 0.6827 ± 0.0151
